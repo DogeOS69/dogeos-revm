@@ -15,6 +15,7 @@ mod blake2;
 mod bn254;
 mod hash;
 mod modexp;
+mod transfer;
 
 /// Provides Scroll precompiles, modifying any relevant behaviour.
 #[derive(Debug, Clone)]
@@ -107,7 +108,7 @@ pub(crate) fn galileo() -> &'static Precompiles {
     static INSTANCE: OnceBox<Precompiles> = OnceBox::new();
     INSTANCE.get_or_init(|| {
         let mut precompiles = feynman().clone();
-        precompiles.extend([modexp::GALILEO, secp256r1::P256VERIFY_OSAKA]);
+        precompiles.extend([modexp::GALILEO, secp256r1::P256VERIFY_OSAKA, transfer::DUMMY_PRECOMPILE]);
         Box::new(precompiles)
     })
 }
@@ -133,6 +134,10 @@ where
         context: &mut CTX,
         inputs: &CallInputs,
     ) -> Result<Option<Self::Output>, String> {
+        if self.spec.is_enabled_in(transfer::ENABLE_SPEC) && inputs.bytecode_address == transfer::ADDRESS {
+            return self.run_transfer(context, inputs);
+        }
+
         self.precompile_provider.run(context, inputs)
     }
 
