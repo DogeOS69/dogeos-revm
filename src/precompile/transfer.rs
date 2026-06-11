@@ -22,10 +22,6 @@ pub const ADDRESS: Address = u64_to_address(0xff - 2);
 /// The Transfer precompile id.
 pub const ID: PrecompileId = PrecompileId::Custom(Cow::Borrowed("TRANSFER"));
 
-/// The DOGE token contract address, which is the only allowed caller of the Transfer precompile.
-pub const DOGE_TOKEN_CONTRACT_ADDRESS: Address =
-    address!("0x000000000000000000000000000000000000d09e");
-
 /// The Transfer precompile gas cost.
 pub const GAS_COST: u64 = 9000;
 
@@ -42,6 +38,7 @@ impl ScrollPrecompileProvider {
         &mut self,
         context: &mut CTX,
         inputs: &CallInputs,
+        transfer_caller: Address,
     ) -> Result<Option<InterpreterResult>, String> {
         // -- PATCHED: pre check --
         let gas = Gas::new(inputs.gas_limit);
@@ -56,7 +53,7 @@ impl ScrollPrecompileProvider {
         }
 
         // 2. only allow DOGE token contract to call this precompile
-        if inputs.caller != DOGE_TOKEN_CONTRACT_ADDRESS {
+        if inputs.caller != transfer_caller {
             if context.journal().depth() == 1 {
                 context.local_mut().set_precompile_error_context(
                     "invalid caller for transfer precompile".to_string(),
