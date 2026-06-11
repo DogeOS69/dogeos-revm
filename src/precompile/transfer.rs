@@ -1,13 +1,20 @@
-use std::borrow::Cow;
-use std::{format, string::{String, ToString}};
+use std::{
+    borrow::Cow,
+    format,
+    string::{String, ToString},
+};
 
-use revm::context::{Cfg, ContextTr, JournalTr, LocalContextTr};
-use revm::interpreter::{CallInput, CallInputs, Gas, InstructionResult, InterpreterResult};
-use revm::precompile::{u64_to_address, Precompile, PrecompileError, PrecompileId, PrecompileOutput, PrecompileResult};
-use revm::primitives::{Address, Bytes};
+use crate::{precompile::ScrollPrecompileProvider, ScrollSpecId};
+use revm::{
+    context::{Cfg, ContextTr, JournalTr, LocalContextTr},
+    interpreter::{CallInput, CallInputs, Gas, InstructionResult, InterpreterResult},
+    precompile::{
+        u64_to_address, Precompile, PrecompileError, PrecompileId, PrecompileOutput,
+        PrecompileResult,
+    },
+    primitives::{Address, Bytes},
+};
 use revm_primitives::{address, U256};
-use crate::precompile::ScrollPrecompileProvider;
-use crate::ScrollSpecId;
 
 /// The Transfer precompile address.
 pub const ADDRESS: Address = u64_to_address(0xff - 2);
@@ -16,7 +23,8 @@ pub const ADDRESS: Address = u64_to_address(0xff - 2);
 pub const ID: PrecompileId = PrecompileId::Custom(Cow::Borrowed("TRANSFER"));
 
 /// The DOGE token contract address, which is the only allowed caller of the Transfer precompile.
-pub const DOGE_TOKEN_CONTRACT_ADDRESS: Address = address!("0x000000000000000000000000000000000000d09e");
+pub const DOGE_TOKEN_CONTRACT_ADDRESS: Address =
+    address!("0x000000000000000000000000000000000000d09e");
 
 /// The Transfer precompile gas cost.
 pub const GAS_COST: u64 = 9000;
@@ -25,7 +33,8 @@ pub const GAS_COST: u64 = 9000;
 pub const ENABLE_SPEC: ScrollSpecId = ScrollSpecId::GALILEO;
 
 /// The dummy Transfer precompile
-pub const DUMMY_PRECOMPILE: Precompile = Precompile::new(ID, ADDRESS, |_, _| unreachable!("dummy should not be called"));
+pub const DUMMY_PRECOMPILE: Precompile =
+    Precompile::new(ID, ADDRESS, |_, _| unreachable!("dummy should not be called"));
 
 impl ScrollPrecompileProvider {
     // copied from EthPrecompiles::run
@@ -49,9 +58,9 @@ impl ScrollPrecompileProvider {
         // 2. only allow DOGE token contract to call this precompile
         if inputs.caller != DOGE_TOKEN_CONTRACT_ADDRESS {
             if context.journal().depth() == 1 {
-                context
-                    .local_mut()
-                    .set_precompile_error_context("invalid caller for transfer precompile".to_string());
+                context.local_mut().set_precompile_error_context(
+                    "invalid caller for transfer precompile".to_string(),
+                );
             }
 
             return Ok(Some(InterpreterResult {
@@ -61,11 +70,8 @@ impl ScrollPrecompileProvider {
             }));
         }
 
-        let mut result = InterpreterResult {
-            result: InstructionResult::Return,
-            gas,
-            output: Bytes::new(),
-        };
+        let mut result =
+            InterpreterResult { result: InstructionResult::Return, gas, output: Bytes::new() };
         // -- END PATCH --
 
         let exec_result = {
@@ -77,7 +83,7 @@ impl ScrollPrecompileProvider {
                 CallInput::SharedBuffer(range) => {
                     // -- PATCHED: fix borrow --
                     if let Some(slice) = local.shared_memory_buffer_slice(range.clone()) {
-                    // -- END PATCH --
+                        // -- END PATCH --
                         r = slice;
                         r.as_ref()
                     } else {
@@ -113,9 +119,7 @@ impl ScrollPrecompileProvider {
                 // into the local context so it can be returned as output in the final result.
                 // Only do this for non-OOG errors (OOG is a distinct halt reason without output).
                 if !e.is_oog() && context.journal().depth() == 1 {
-                    context
-                        .local_mut()
-                        .set_precompile_error_context(e.to_string());
+                    context.local_mut().set_precompile_error_context(e.to_string());
                 }
             }
         }
@@ -127,7 +131,7 @@ impl ScrollPrecompileProvider {
 fn execute<CTX: ContextTr<Cfg: Cfg<Spec = ScrollSpecId>>>(
     journal: &mut <CTX as ContextTr>::Journal,
     input: &[u8],
-    gas_limit: u64
+    gas_limit: u64,
 ) -> PrecompileResult {
     const CALL_DATA_LENGTH: usize = 32 + 32 + 32; // 3 parameters, each 32 bytes
 
@@ -143,15 +147,13 @@ fn execute<CTX: ContextTr<Cfg: Cfg<Spec = ScrollSpecId>>>(
     let to = Address::from_slice(&input[44..64]);
     let value = U256::from_be_slice(&input[64..96]);
 
-    match journal.transfer(from, to, value) {
-        Ok(None) => {},
-        Ok(Some(e)) => return Err(PrecompileError::other(format!("transfer failed: {e:?}"))),
-        Err(e) => return Err(PrecompileError::Fatal(e.to_string())),
+    // load account regardless of the value
+    journal.load_account(from).map_err(|e| PrecompileError::Fatal(e.to_string()))?;
+    journal.load_account(to).map_err(|e| PrecompileError::Fatal(e.to_string()))?;
+
+    if let Some(e) = journal.transfer_loaded(from, to, value) {
+        return Err(PrecompileError::other(format!("transfer failed: {e:?}")));
     }
 
-    Ok(PrecompileOutput {
-        bytes: Bytes::new(),
-        gas_used: GAS_COST,
-        reverted: false,
-    })
+    Ok(PrecompileOutput { bytes: Bytes::new(), gas_used: GAS_COST, reverted: false })
 }
