@@ -15,12 +15,16 @@ mod blake2;
 mod bn254;
 mod hash;
 mod modexp;
+mod transfer;
 
 /// Provides Scroll precompiles, modifying any relevant behaviour.
 #[derive(Debug, Clone)]
 pub struct ScrollPrecompileProvider {
     precompile_provider: EthPrecompiles,
     spec: ScrollSpecId,
+    /// The DOGE token contract address, which is the only allowed caller of the Transfer
+    /// precompile.
+    transfer_caller: Option<Address>,
 }
 
 impl ScrollPrecompileProvider {
@@ -33,7 +37,18 @@ impl ScrollPrecompileProvider {
             ScrollSpecId::FEYNMAN => feynman(),
             ScrollSpecId::GALILEO => galileo(),
         };
-        Self { precompile_provider: EthPrecompiles { precompiles, spec: SpecId::default() }, spec }
+        Self {
+            precompile_provider: EthPrecompiles { precompiles, spec: SpecId::default() },
+            spec,
+            transfer_caller: None,
+        }
+    }
+
+    /// Set the DOGE token contract address, which is the only allowed caller of the Transfer
+    /// precompile.
+    #[inline]
+    pub fn set_transfer_caller(&mut self, transfer_caller: Address) {
+        self.transfer_caller = Some(transfer_caller);
     }
 
     /// Precompiles getter.
@@ -107,7 +122,11 @@ pub(crate) fn galileo() -> &'static Precompiles {
     static INSTANCE: OnceBox<Precompiles> = OnceBox::new();
     INSTANCE.get_or_init(|| {
         let mut precompiles = feynman().clone();
-        precompiles.extend([modexp::GALILEO, secp256r1::P256VERIFY_OSAKA]);
+        precompiles.extend([
+            modexp::GALILEO,
+            secp256r1::P256VERIFY_OSAKA,
+            transfer::DUMMY_PRECOMPILE,
+        ]);
         Box::new(precompiles)
     })
 }
@@ -133,6 +152,13 @@ where
         context: &mut CTX,
         inputs: &CallInputs,
     ) -> Result<Option<Self::Output>, String> {
+        if self.spec.is_enabled_in(transfer::ENABLE_SPEC) &&
+            inputs.bytecode_address == transfer::ADDRESS
+        {
+            let transfer_caller = self.transfer_caller.expect("transfer_caller must be set");
+            return self.run_transfer(context, inputs, transfer_caller);
+        }
+
         self.precompile_provider.run(context, inputs)
     }
 
