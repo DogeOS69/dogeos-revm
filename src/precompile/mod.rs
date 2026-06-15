@@ -36,6 +36,7 @@ impl ScrollPrecompileProvider {
             ScrollSpecId::EUCLID => euclid(),
             ScrollSpecId::FEYNMAN => feynman(),
             ScrollSpecId::GALILEO => galileo(),
+            ScrollSpecId::GALDOGEOS => galdogeos(),
         };
         Self {
             precompile_provider: EthPrecompiles { precompiles, spec: SpecId::default() },
@@ -122,11 +123,16 @@ pub(crate) fn galileo() -> &'static Precompiles {
     static INSTANCE: OnceBox<Precompiles> = OnceBox::new();
     INSTANCE.get_or_init(|| {
         let mut precompiles = feynman().clone();
-        precompiles.extend([
-            modexp::GALILEO,
-            secp256r1::P256VERIFY_OSAKA,
-            transfer::DUMMY_PRECOMPILE,
-        ]);
+        precompiles.extend([modexp::GALILEO, secp256r1::P256VERIFY_OSAKA]);
+        Box::new(precompiles)
+    })
+}
+
+pub(crate) fn galdogeos() -> &'static Precompiles {
+    static INSTANCE: OnceBox<Precompiles> = OnceBox::new();
+    INSTANCE.get_or_init(|| {
+        let mut precompiles = galileo().clone();
+        precompiles.extend([transfer::DUMMY_PRECOMPILE]);
         Box::new(precompiles)
     })
 }
