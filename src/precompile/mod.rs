@@ -132,7 +132,7 @@ pub(crate) fn galdogeos() -> &'static Precompiles {
     static INSTANCE: OnceBox<Precompiles> = OnceBox::new();
     INSTANCE.get_or_init(|| {
         let mut precompiles = galileo().clone();
-        precompiles.extend([transfer::DUMMY_PRECOMPILE]);
+        precompiles.extend([hash::ripemd160::GALDOGEOS, transfer::DUMMY_PRECOMPILE]);
         Box::new(precompiles)
     })
 }
