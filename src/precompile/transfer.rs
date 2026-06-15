@@ -26,7 +26,7 @@ pub const ID: PrecompileId = PrecompileId::Custom(Cow::Borrowed("TRANSFER"));
 pub const GAS_COST: u64 = 9000;
 
 /// The Transfer precompile enable specs.
-pub const ENABLE_SPEC: ScrollSpecId = ScrollSpecId::GALILEO;
+pub const ENABLE_SPEC: ScrollSpecId = ScrollSpecId::GALDOGEOS;
 
 /// The dummy Transfer precompile
 pub const DUMMY_PRECOMPILE: Precompile =
@@ -145,7 +145,9 @@ fn execute<CTX: ContextTr<Cfg: Cfg<Spec = ScrollSpecId>>>(
     let value = U256::from_be_slice(&input[64..96]);
 
     // load account regardless of the value
-    if let Some(e) = journal.transfer(from, to, value).map_err(|e| PrecompileError::Fatal(e.to_string()))? {
+    if let Some(e) =
+        journal.transfer(from, to, value).map_err(|e| PrecompileError::Fatal(e.to_string()))?
+    {
         return Err(PrecompileError::other(format!("transfer failed: {e:?}")));
     }
 
