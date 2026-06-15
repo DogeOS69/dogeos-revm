@@ -145,10 +145,7 @@ fn execute<CTX: ContextTr<Cfg: Cfg<Spec = ScrollSpecId>>>(
     let value = U256::from_be_slice(&input[64..96]);
 
     // load account regardless of the value
-    journal.load_account(from).map_err(|e| PrecompileError::Fatal(e.to_string()))?;
-    journal.load_account(to).map_err(|e| PrecompileError::Fatal(e.to_string()))?;
-
-    if let Some(e) = journal.transfer_loaded(from, to, value) {
+    if let Some(e) = journal.transfer(from, to, value).map_err(|e| PrecompileError::Fatal(e.to_string()))? {
         return Err(PrecompileError::other(format!("transfer failed: {e:?}")));
     }
 
