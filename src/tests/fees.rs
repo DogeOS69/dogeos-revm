@@ -22,7 +22,8 @@ fn test_should_deduct_correct_fees_bernoulli() -> Result<(), Box<dyn core::error
     let mut evm = ctx.clone().build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
-    handler.pre_execution(&mut evm).unwrap();
+    let mut init_and_floor_gas = handler.validate(&mut evm)?;
+    handler.pre_execution(&mut evm, &mut init_and_floor_gas)?;
 
     let ctx = evm.ctx_mut();
     let caller_account = ctx.journal_mut().load_account(CALLER)?;
@@ -41,7 +42,8 @@ fn test_should_deduct_correct_fees_curie() -> Result<(), Box<dyn core::error::Er
     let mut evm = ctx.clone().build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
-    handler.pre_execution(&mut evm).unwrap();
+    let mut init_and_floor_gas = handler.validate(&mut evm)?;
+    handler.pre_execution(&mut evm, &mut init_and_floor_gas)?;
 
     let ctx = evm.ctx_mut();
     let caller_account = ctx.journal_mut().load_account(CALLER)?;
@@ -65,7 +67,8 @@ fn test_no_rollup_fee_for_system_tx() -> Result<(), Box<dyn core::error::Error>>
     let mut evm = ctx.clone().build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
-    handler.pre_execution(&mut evm).unwrap();
+    let mut init_and_floor_gas = handler.validate(&mut evm)?;
+    handler.pre_execution(&mut evm, &mut init_and_floor_gas)?;
 
     let ctx = evm.ctx_mut();
     let caller_account = ctx.journal_mut().load_account(CALLER)?;
@@ -84,7 +87,7 @@ fn test_reward_beneficiary_system_tx() -> Result<(), Box<dyn core::error::Error>
 
     let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-    let gas = Gas::new_spent(21000);
+    let gas = Gas::new_spent_with_reservoir(21000, 0);
     let mut result = FrameResult::Call(CallOutcome::new(
         InterpreterResult { result: InstructionResult::Return, output: Default::default(), gas },
         0..0,
@@ -125,7 +128,8 @@ fn test_should_deduct_correct_fees_feynman() -> Result<(), Box<dyn core::error::
     let mut evm = ctx.clone().build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
-    handler.pre_execution(&mut evm).unwrap();
+    let mut init_and_floor_gas = handler.validate(&mut evm)?;
+    handler.pre_execution(&mut evm, &mut init_and_floor_gas)?;
 
     let ctx = evm.ctx_mut();
     let caller_account = ctx.journal_mut().load_account(CALLER)?;

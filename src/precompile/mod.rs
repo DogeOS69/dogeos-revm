@@ -6,8 +6,10 @@ use revm::{
     context::{Cfg, ContextTr},
     handler::{EthPrecompiles, PrecompileProvider},
     interpreter::{CallInputs, InterpreterResult},
-    precompile::{self, secp256r1, Precompile, PrecompileError, PrecompileId, Precompiles},
-    primitives::Address,
+    precompile::{
+        self, secp256r1, Precompile, PrecompileHalt, PrecompileId, PrecompileOutput, Precompiles,
+    },
+    primitives::{Address, AddressSet},
 };
 use revm_primitives::hardfork::SpecId;
 
@@ -59,11 +61,14 @@ impl ScrollPrecompileProvider {
     }
 }
 
-/// A helper function that creates a precompile that returns `PrecompileError::Other("Precompile not
-/// implemented".into())` for a given address.
+/// A helper function that creates a precompile that halts with "not implemented" for a given
+/// address.
 const fn precompile_not_implemented(id: PrecompileId, address: Address) -> Precompile {
-    Precompile::new(id, address, |_input: &[u8], _gas_limit: u64| {
-        Err(PrecompileError::Other("NotImplemented: Precompile not implemented".into()))
+    Precompile::new(id, address, |_input: &[u8], _gas_limit: u64, reservoir: u64| {
+        Ok(PrecompileOutput::halt(
+            PrecompileHalt::other_static("NotImplemented: Precompile not implemented"),
+            reservoir,
+        ))
     })
 }
 
@@ -169,7 +174,7 @@ where
     }
 
     #[inline]
-    fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
+    fn warm_addresses(&self) -> &AddressSet {
         self.precompile_provider.warm_addresses()
     }
 
@@ -189,7 +194,7 @@ impl Default for ScrollPrecompileProvider {
 mod tests {
     use super::*;
     use crate::precompile::bn254::pair;
-    use revm::{precompile::PrecompileError, primitives::hex};
+    use revm::{precompile::PrecompileHalt, primitives::hex};
     use std::vec;
 
     #[test]
@@ -201,15 +206,15 @@ mod tests {
 
         let precompile =
             galileo().get(&hash::ripemd160::ADDRESS).expect("precompile exists before GALDOGEOS");
-        let outcome = precompile.execute(&input, u64::MAX);
+        let outcome = precompile.execute(&input, u64::MAX, 0).expect("call halts");
         assert!(matches!(
-            outcome,
-            Err(PrecompileError::Other(msg)) if msg.contains("NotImplemented")
+            outcome.halt_reason(),
+            Some(PrecompileHalt::Other(msg)) if msg.contains("NotImplemented")
         ));
 
         let precompile =
             galdogeos().get(&hash::ripemd160::ADDRESS).expect("precompile exists in GALDOGEOS");
-        let outcome = precompile.execute(&input, u64::MAX).expect("call succeeds");
+        let outcome = precompile.execute(&input, u64::MAX, 0).expect("call succeeds");
         assert_eq!(outcome.bytes.as_ref(), expected.as_slice());
     }
 
@@ -219,7 +224,7 @@ mod tests {
         let precompile =
             galdogeos().get(&hash::ripemd160::ADDRESS).expect("precompile exists in GALDOGEOS");
 
-        let outcome = precompile.execute(&input, u64::MAX);
+        let outcome = precompile.execute(&input, u64::MAX, 0);
 
         assert!(outcome.is_ok(), "32-byte input should be accepted");
     }
@@ -230,11 +235,11 @@ mod tests {
         let precompile =
             galdogeos().get(&hash::ripemd160::ADDRESS).expect("precompile exists in GALDOGEOS");
 
-        let outcome = precompile.execute(&input, u64::MAX);
+        let outcome = precompile.execute(&input, u64::MAX, 0).expect("call halts");
 
         assert!(matches!(
-            outcome,
-            Err(PrecompileError::Other(msg)) if msg.contains("Ripemd160InputOverflow")
+            outcome.halt_reason(),
+            Some(PrecompileHalt::Other(msg)) if msg.contains("Ripemd160InputOverflow")
         ));
     }
 
@@ -249,12 +254,12 @@ mod tests {
 
         // Euclid version should reject this input
         let precompile = euclid().get(&pair::ADDRESS).expect("precompile exists");
-        let outcome = precompile.execute(&input, u64::MAX);
-        assert!(outcome.is_err());
+        let outcome = precompile.execute(&input, u64::MAX, 0).expect("call halts");
+        assert!(outcome.is_halt());
 
         // Feynman version should accept this input
         let precompile = feynman().get(&pair::ADDRESS).expect("precompile exists");
-        let outcome = precompile.execute(&input, u64::MAX).expect("call succeeds");
+        let outcome = precompile.execute(&input, u64::MAX, 0).expect("call succeeds");
         assert_eq!(outcome.bytes, expected);
     }
 }

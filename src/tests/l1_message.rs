@@ -9,12 +9,11 @@ use std::boxed::Box;
 
 use crate::test_utils::MIN_TRANSACTION_COST;
 use revm::{
-    bytecode::LegacyRawBytecode,
     context::{
+        journaled_state::account::JournaledAccountTr,
         result::{EVMError, ExecutionResult, HaltReason, InvalidTransaction, ResultAndState},
         ContextTr, JournalTr,
     },
-    context_interface::result::ExecutionResult::Halt,
     handler::{EthFrame, EvmTr, FrameResult, Handler},
     interpreter::{
         gas::calculate_initial_tx_gas_for_tx, CallOutcome, Gas, InstructionResult,
@@ -32,7 +31,8 @@ fn test_l1_message_validate_lacking_funds() -> Result<(), Box<dyn core::error::E
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     // pre execution includes fees deduction, which should be skipped for l1 messages.
-    handler.pre_execution(&mut evm)?;
+    let mut init_and_floor_gas = handler.validate(&mut evm)?;
+    handler.pre_execution(&mut evm, &mut init_and_floor_gas)?;
 
     Ok(())
 }
@@ -58,7 +58,8 @@ fn test_l1_message_should_not_deduct_caller() -> Result<(), Box<dyn core::error:
     let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
     handler.load_accounts(&mut evm)?;
-    handler.validate_against_state_and_deduct_caller(&mut evm)?;
+    let mut init_and_floor_gas = handler.validate(&mut evm)?;
+    handler.validate_against_state_and_deduct_caller(&mut evm, &mut init_and_floor_gas)?;
 
     // nonce should be increase and caller should have same balance as the start (0).
     let ctx = evm.ctx_mut();
@@ -82,7 +83,7 @@ fn test_l1_message_last_frame_result() -> Result<(), Box<dyn core::error::Error>
         InterpreterResult { result: InstructionResult::Return, output: Default::default(), gas },
         0..0,
     ));
-    handler.last_frame_result(&mut evm, &mut result)?;
+    handler.last_frame_result(&mut evm, 0, &mut result)?;
 
     // refund should be 0 for l1 messages.
     gas.set_refund(0);
@@ -118,7 +119,7 @@ fn test_l1_message_should_not_reward_beneficiary() -> Result<(), Box<dyn core::e
 
     let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-    let gas = Gas::new_spent(21000);
+    let gas = Gas::new_spent_with_reservoir(21000, 0);
     let mut result = FrameResult::Call(CallOutcome::new(
         InterpreterResult { result: InstructionResult::Return, output: Default::default(), gas },
         0..0,
@@ -146,13 +147,10 @@ fn test_l1_message_should_revert_with_out_of_funds() -> Result<(), Box<dyn core:
     let ResultAndState { result, .. } = evm.transact(tx)?;
 
     // L1 message should pass pre-execution but revert with `OutOfFunds`.
-    assert_eq!(
-        result,
-        ExecutionResult::Halt {
-            gas_used: MIN_TRANSACTION_COST.to(),
-            reason: HaltReason::OutOfFunds
-        }
+    assert!(
+        matches!(&result, ExecutionResult::Halt { reason, .. } if *reason == HaltReason::OutOfFunds)
     );
+    assert_eq!(result.tx_gas_used(), MIN_TRANSACTION_COST.to());
 
     Ok(())
 }
@@ -183,13 +181,15 @@ fn test_l1_message_should_pass_pre_execution() -> Result<(), Box<dyn core::error
         })
         // set the caller nonce to 1 and check pre execution passes.
         .modify_journal_chained(|journal| {
-            let caller = journal.load_account(CALLER).unwrap();
-            caller.data.info.nonce += 1;
+            let mut caller = journal.load_account_mut(CALLER).unwrap();
+            let nonce = caller.nonce() + 1;
+            caller.unsafe_set_nonce(nonce);
         });
     let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
-    handler.pre_execution(&mut evm)?;
+    let mut init_and_floor_gas = handler.validate(&mut evm)?;
+    handler.pre_execution(&mut evm, &mut init_and_floor_gas)?;
 
     Ok(())
 }
@@ -202,14 +202,14 @@ fn test_l1_message_eip_3607() -> Result<(), Box<dyn core::error::Error>> {
         })
         // set the caller nonce to 1 and check pre execution passes.
         .modify_journal_chained(|journal| {
-            let caller = journal.load_account(CALLER).unwrap();
-            caller.data.info.code =
-                Some(Bytecode::LegacyAnalyzed(LegacyRawBytecode([1u8; 2].into()).into_analyzed()));
+            let mut caller = journal.load_account_mut(CALLER).unwrap();
+            caller.set_code_and_hash_slow(Bytecode::new_legacy(bytes!("0x0101")));
         });
     let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
-    let err = handler.pre_execution(&mut evm).unwrap_err();
+    let mut init_and_floor_gas = handler.validate(&mut evm)?;
+    let err = handler.pre_execution(&mut evm, &mut init_and_floor_gas).unwrap_err();
     assert_eq!(err, EVMError::Transaction(InvalidTransaction::RejectCallerWithCode));
 
     Ok(())
@@ -233,9 +233,12 @@ fn test_l1_message_should_not_have_floor_gas_as_gas_used() -> Result<(), Box<dyn
 
     // floor gas is TOTAL_COST_FLOOR_PER_TOKEN * tokens_in_calldata + 21_000 = 22070;
     let expected_init_gas =
-        calculate_initial_tx_gas_for_tx(tx, SpecId::SHANGHAI, true, true).initial_gas;
+        calculate_initial_tx_gas_for_tx(tx, SpecId::SHANGHAI).initial_total_gas();
 
-    assert_eq!(res.result, Halt { reason: HaltReason::OutOfFunds, gas_used: expected_init_gas });
+    assert!(
+        matches!(&res.result, ExecutionResult::Halt { reason, .. } if *reason == HaltReason::OutOfFunds)
+    );
+    assert_eq!(res.result.tx_gas_used(), expected_init_gas);
 
     Ok(())
 }

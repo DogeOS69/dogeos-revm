@@ -1,10 +1,11 @@
 use revm::{
     precompile::{
-        modexp,
+        call_eth_precompile, modexp,
         modexp::{berlin_gas_calc, run_inner},
         u64_to_address,
         utilities::right_pad_with_offset,
-        Precompile, PrecompileError, PrecompileId, PrecompileResult,
+        EthPrecompileResult, Precompile, PrecompileHalt, PrecompileId, PrecompileOutput,
+        PrecompileResult,
     },
     primitives::{Address, U256},
 };
@@ -16,38 +17,47 @@ pub const ADDRESS: Address = u64_to_address(5);
 pub const BERNOULLI_LEN_LIMIT: U256 = U256::from_limbs([32, 0, 0, 0]);
 
 /// The MODEXP precompile with BERNOULLI length limit rule.
-pub const BERNOULLI: Precompile = Precompile::new(PrecompileId::ModExp, ADDRESS, bernoulli_run);
+pub const BERNOULLI: Precompile =
+    Precompile::new(PrecompileId::ModExp, ADDRESS, bernoulli_precompile);
 
 /// The Galileo MODEXP precompile.
-pub const GALILEO: Precompile = Precompile::new(PrecompileId::ModExp, ADDRESS, modexp::osaka_run);
+pub const GALILEO: Precompile = Precompile::new(PrecompileId::ModExp, ADDRESS, galileo_run);
 
 /// The bernoulli MODEXP precompile implementation.
 ///
 /// # Errors
-/// - `PrecompileError::Other("ModexpBaseOverflow: modexp base overflow".into())` if the base length
-///   is greater than 32 bytes.
-/// - `PrecompileError::Other("ModexpExpOverflow: modexp exp overflow".into())` if the exponent
-///   length is greater than 32 bytes.
-/// - `PrecompileError::Other("ModexpModOverflow: modexp mod overflow".into())` if the modulus
-///   length is greater than 32 bytes.
-pub fn bernoulli_run(input: &[u8], gas_limit: u64) -> PrecompileResult {
+/// - `PrecompileHalt::Other("ModexpBaseOverflow: modexp base overflow")` if the base length is
+///   greater than 32 bytes.
+/// - `PrecompileHalt::Other("ModexpExpOverflow: modexp exp overflow")` if the exponent length is
+///   greater than 32 bytes.
+/// - `PrecompileHalt::Other("ModexpModOverflow: modexp mod overflow")` if the modulus length is
+///   greater than 32 bytes.
+pub fn bernoulli_run(input: &[u8], gas_limit: u64) -> EthPrecompileResult {
     let base_len = U256::from_be_bytes(right_pad_with_offset::<32>(input, 0).into_owned());
     let exp_len = U256::from_be_bytes(right_pad_with_offset::<32>(input, 32).into_owned());
     let mod_len = U256::from_be_bytes(right_pad_with_offset::<32>(input, 64).into_owned());
 
     // modexp temporarily only accepts inputs of 32 bytes (256 bits) or less
     if base_len > BERNOULLI_LEN_LIMIT {
-        return Err(PrecompileError::Other("ModexpBaseOverflow: modexp base overflow".into()));
+        return Err(PrecompileHalt::other_static("ModexpBaseOverflow: modexp base overflow"));
     }
     if exp_len > BERNOULLI_LEN_LIMIT {
-        return Err(PrecompileError::Other("ModexpExpOverflow: modexp exp overflow".into()));
+        return Err(PrecompileHalt::other_static("ModexpExpOverflow: modexp exp overflow"));
     }
     if mod_len > BERNOULLI_LEN_LIMIT {
-        return Err(PrecompileError::Other("ModexpModOverflow: modexp mod overflow".into()));
+        return Err(PrecompileHalt::other_static("ModexpModOverflow: modexp mod overflow"));
     }
 
     const OSAKA: bool = false;
     run_inner::<_, OSAKA>(input, gas_limit, 200, berlin_gas_calc)
+}
+
+fn bernoulli_precompile(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
+    Ok(PrecompileOutput::from_eth_result(bernoulli_run(input, gas_limit), reservoir))
+}
+
+fn galileo_run(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
+    Ok(call_eth_precompile(modexp::osaka_run, input, gas_limit, reservoir))
 }
 
 #[cfg(test)]
@@ -125,7 +135,7 @@ mod tests {
         let bernoulli_result = bernoulli_run(&input, gas_limit);
         assert!(bernoulli_result.is_err(), "BERNOULLI should reject base_len > 32");
         assert!(
-            matches!(bernoulli_result.unwrap_err(), PrecompileError::Other(msg) if msg.contains("ModexpBaseOverflow")),
+            matches!(bernoulli_result.unwrap_err(), PrecompileHalt::Other(msg) if msg.contains("ModexpBaseOverflow")),
             "BERNOULLI should return ModexpBaseOverflow error"
         );
 

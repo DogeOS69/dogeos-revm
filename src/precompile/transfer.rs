@@ -7,14 +7,15 @@ use std::{
 use crate::{precompile::ScrollPrecompileProvider, ScrollSpecId};
 use revm::{
     context::{Cfg, ContextTr, JournalTr, LocalContextTr},
+    handler::precompile_output_to_interpreter_result,
     interpreter::{CallInput, CallInputs, Gas, InstructionResult, InterpreterResult},
     precompile::{
-        u64_to_address, Precompile, PrecompileError, PrecompileId, PrecompileOutput,
-        PrecompileResult,
+        u64_to_address, Precompile, PrecompileError, PrecompileHalt, PrecompileId,
+        PrecompileOutput, PrecompileResult,
     },
     primitives::{Address, Bytes},
 };
-use revm_primitives::{address, U256};
+use revm_primitives::U256;
 
 /// The Transfer precompile address.
 pub const ADDRESS: Address = u64_to_address(0xff - 2);
@@ -30,7 +31,7 @@ pub const ENABLE_SPEC: ScrollSpecId = ScrollSpecId::GALDOGEOS;
 
 /// The dummy Transfer precompile
 pub const DUMMY_PRECOMPILE: Precompile =
-    Precompile::new(ID, ADDRESS, |_, _| unreachable!("dummy should not be called"));
+    Precompile::new(ID, ADDRESS, |_, _, _| unreachable!("dummy should not be called"));
 
 impl ScrollPrecompileProvider {
     // copied from EthPrecompiles::run
@@ -41,7 +42,7 @@ impl ScrollPrecompileProvider {
         transfer_caller: Address,
     ) -> Result<Option<InterpreterResult>, String> {
         // -- PATCHED: pre check --
-        let gas = Gas::new(inputs.gas_limit);
+        let gas = Gas::new_with_regular_gas_and_reservoir(inputs.gas_limit, inputs.reservoir);
 
         // 1. can't transfer during static call
         if inputs.is_static {
@@ -60,15 +61,13 @@ impl ScrollPrecompileProvider {
                 );
             }
 
-            return Ok(Some(InterpreterResult {
-                result: InstructionResult::PrecompileError,
-                gas,
-                output: Bytes::new(),
-            }));
+            let output = PrecompileOutput::halt(
+                PrecompileHalt::other_static("invalid caller for transfer precompile"),
+                inputs.reservoir,
+            );
+            return Ok(Some(precompile_output_to_interpreter_result(output, inputs.gas_limit)));
         }
 
-        let mut result =
-            InterpreterResult { result: InstructionResult::Return, gas, output: Bytes::new() };
         // -- END PATCH --
 
         let exec_result = {
@@ -90,37 +89,22 @@ impl ScrollPrecompileProvider {
                 CallInput::Bytes(bytes) => bytes.0.iter().as_slice(),
             };
             // -- PATCHED: actual precompile execution --
-            execute::<CTX>(journal, input_bytes, inputs.gas_limit)
+            execute::<CTX>(journal, input_bytes, inputs.gas_limit, inputs.reservoir)
             // -- END PATCH --
         };
 
         match exec_result {
             Ok(output) => {
-                let underflow = result.gas.record_cost(output.gas_used);
-                assert!(underflow, "Gas underflow is not possible");
-                result.result = if output.reverted {
-                    InstructionResult::Revert
-                } else {
-                    InstructionResult::Return
-                };
-                result.output = output.bytes;
+                if let Some(halt_reason) = output.halt_reason() {
+                    if !halt_reason.is_oog() && context.journal().depth() == 1 {
+                        context.local_mut().set_precompile_error_context(halt_reason.to_string());
+                    }
+                }
+                Ok(Some(precompile_output_to_interpreter_result(output, inputs.gas_limit)))
             }
             Err(PrecompileError::Fatal(e)) => return Err(e),
-            Err(e) => {
-                result.result = if e.is_oog() {
-                    InstructionResult::PrecompileOOG
-                } else {
-                    InstructionResult::PrecompileError
-                };
-                // If this is a top-level precompile call (depth == 1), persist the error message
-                // into the local context so it can be returned as output in the final result.
-                // Only do this for non-OOG errors (OOG is a distinct halt reason without output).
-                if !e.is_oog() && context.journal().depth() == 1 {
-                    context.local_mut().set_precompile_error_context(e.to_string());
-                }
-            }
+            Err(e) => return Err(e.to_string()),
         }
-        Ok(Some(result))
     }
 }
 
@@ -129,15 +113,19 @@ fn execute<CTX: ContextTr<Cfg: Cfg<Spec = ScrollSpecId>>>(
     journal: &mut <CTX as ContextTr>::Journal,
     input: &[u8],
     gas_limit: u64,
+    reservoir: u64,
 ) -> PrecompileResult {
     const CALL_DATA_LENGTH: usize = 32 + 32 + 32; // 3 parameters, each 32 bytes
 
     if gas_limit < GAS_COST {
-        return Err(PrecompileError::OutOfGas);
+        return Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, reservoir));
     }
 
     if input.len() != CALL_DATA_LENGTH {
-        return Err(PrecompileError::other("invalid transfer call input"));
+        return Ok(PrecompileOutput::halt(
+            PrecompileHalt::other_static("invalid transfer call input"),
+            reservoir,
+        ));
     }
 
     let from = Address::from_slice(&input[12..32]);
@@ -148,8 +136,11 @@ fn execute<CTX: ContextTr<Cfg: Cfg<Spec = ScrollSpecId>>>(
     if let Some(e) =
         journal.transfer(from, to, value).map_err(|e| PrecompileError::Fatal(e.to_string()))?
     {
-        return Err(PrecompileError::other(format!("transfer failed: {e:?}")));
+        return Ok(PrecompileOutput::halt(
+            PrecompileHalt::other(format!("transfer failed: {e:?}")),
+            reservoir,
+        ));
     }
 
-    Ok(PrecompileOutput { bytes: Bytes::new(), gas_used: GAS_COST, reverted: false })
+    Ok(PrecompileOutput::new(GAS_COST, Bytes::new(), reservoir))
 }

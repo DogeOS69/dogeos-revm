@@ -4,9 +4,9 @@ use crate::{exec::ScrollContextTr, l1block::L1BlockInfo, transaction::ScrollTxTr
 use std::{boxed::Box, string::ToString};
 
 use revm::{
-    bytecode::Bytecode,
     context::{
-        result::{HaltReason, InvalidTransaction},
+        journaled_state::account::JournaledAccountTr,
+        result::{HaltReason, InvalidTransaction, ResultGas},
         Block, Cfg, ContextTr, JournalTr, Transaction,
     },
     handler::{
@@ -59,7 +59,11 @@ where
     type HaltReason = HaltReason;
 
     #[inline]
-    fn pre_execution(&self, evm: &mut Self::Evm) -> Result<u64, Self::Error> {
+    fn pre_execution(
+        &self,
+        evm: &mut Self::Evm,
+        init_and_floor_gas: &mut InitialAndFloorGas,
+    ) -> Result<u64, Self::Error> {
         // only load the L1BlockInfo for txs that are not l1 messages.
         if !evm.ctx().tx().is_l1_msg() && !evm.ctx().tx().is_system_tx() {
             let spec = evm.ctx().cfg().spec();
@@ -67,9 +71,9 @@ where
             *evm.ctx().chain_mut() = l1_block_info;
         }
 
-        self.validate_against_state_and_deduct_caller(evm)?;
+        self.validate_against_state_and_deduct_caller(evm, init_and_floor_gas)?;
         self.load_accounts(evm)?;
-        let gas = self.apply_eip7702_auth_list(evm)?;
+        let gas = self.apply_eip7702_auth_list(evm, init_and_floor_gas)?;
         Ok(gas)
     }
 
@@ -77,6 +81,7 @@ where
     fn validate_against_state_and_deduct_caller(
         &self,
         evm: &mut Self::Evm,
+        init_and_floor_gas: &mut InitialAndFloorGas,
     ) -> Result<(), Self::Error> {
         // load caller's account.
         let ctx_ref = evm.ctx_ref();
@@ -90,7 +95,7 @@ where
         if !is_l1_msg {
             // We deduct caller max balance after minting and before deducing the
             // l1 cost, max values is already checked in pre_validate but l1 cost wasn't.
-            self.mainnet.validate_against_state_and_deduct_caller(evm)?;
+            self.mainnet.validate_against_state_and_deduct_caller(evm, init_and_floor_gas)?;
         }
 
         // process rollup fee
@@ -118,27 +123,27 @@ where
                 tx_l1_cost
             };
 
-            let caller_account = ctx.journal_mut().load_account(caller)?;
+            let mut caller_account = ctx.journal_mut().load_account_mut(caller)?;
 
             // Ensure caller has enough balance to cover L1 cost + optional buffer
-            if l1_cost_with_optional_buffer.gt(&caller_account.info.balance) {
+            let caller_balance = *caller_account.balance();
+            if l1_cost_with_optional_buffer.gt(&caller_balance) {
                 return Err(InvalidTransaction::LackOfFundForMaxFee {
                     fee: l1_cost_with_optional_buffer.into(),
-                    balance: caller_account.info.balance.into(),
+                    balance: caller_balance.into(),
                 }
                 .into());
             }
 
             // Deduct only actual L1 cost (buffer is NOT deducted)
-            caller_account.data.info.balance =
-                caller_account.data.info.balance.saturating_sub(tx_l1_cost);
+            caller_account.set_balance(caller_balance.saturating_sub(tx_l1_cost));
         }
 
         // execute l1 msg checks
         if is_l1_msg {
             // Load caller's account.
             let (tx, journal) = ctx.tx_journal_mut();
-            let mut caller_account = journal.load_account(caller)?;
+            let mut caller_account = journal.load_account_mut(caller)?;
 
             // Note: we skip the balance check at pre-execution level if the transaction is a
             // L1 message and Euclid is enabled. This means the L1 message will reach execution
@@ -147,10 +152,11 @@ where
             let skip_balance_check = tx.is_l1_msg() && spec.is_enabled_in(ScrollSpecId::EUCLID);
             if !skip_balance_check {
                 let max_balance_spending = tx.max_balance_spending()?;
-                if max_balance_spending > caller_account.info.balance {
+                let caller_balance = *caller_account.balance();
+                if max_balance_spending > caller_balance {
                     return Err(InvalidTransaction::LackOfFundForMaxFee {
                         fee: Box::new(max_balance_spending),
-                        balance: Box::new(caller_account.info.balance),
+                        balance: Box::new(caller_balance),
                     }
                     .into());
                 }
@@ -164,14 +170,12 @@ where
             // If the sender is a contract on the L1, address aliasing assures with high probability
             // that the L2 sender would be an EOA.
             if !is_eip3607_disabled {
-                let caller_info = &caller_account.info;
-                let bytecode = match caller_info.code.as_ref() {
-                    Some(bytecode) => bytecode,
-                    None => &Bytecode::default(),
-                };
                 // Allow EOAs whose code is a valid delegation designation,
                 // i.e. 0xef0100 || address, to continue to originate transactions.
-                if !bytecode.is_empty() && !bytecode.is_eip7702() {
+                let reject_caller = caller_account
+                    .code()
+                    .is_some_and(|bytecode| !bytecode.is_empty() && !bytecode.is_eip7702());
+                if reject_caller {
                     return Err(InvalidTransaction::RejectCallerWithCode.into());
                 }
             }
@@ -179,10 +183,10 @@ where
             // Bump the nonce for calls. Nonce for CREATE will be bumped in `make_create_frame`.
             if tx.kind().is_call() {
                 // Nonce is already checked
-                caller_account.info.nonce = caller_account.info.nonce.saturating_add(1);
+                caller_account.bump_nonce();
             }
             // touch account so we know it is changed.
-            caller_account.data.mark_touch();
+            caller_account.touch();
         }
         Ok(())
     }
@@ -191,15 +195,22 @@ where
     fn last_frame_result(
         &mut self,
         evm: &mut Self::Evm,
+        _original_reservoir: u64,
         frame_result: &mut <<Self::Evm as EvmTr>::Frame as FrameTr>::FrameResult,
     ) -> Result<(), Self::Error> {
         let instruction_result = frame_result.interpreter_result().result;
+
+        let create_failed =
+            matches!(frame_result, FrameResult::Create(_)) && !instruction_result.is_ok();
+
         let gas = frame_result.gas_mut();
         let remaining = gas.remaining();
         let refunded = gas.refunded();
+        let reservoir = gas.reservoir();
+        let state_gas_spent = gas.state_gas_spent();
 
         // Spend the gas limit. Gas is reimbursed when the tx returns successfully.
-        *gas = Gas::new_spent(evm.ctx().tx().gas_limit());
+        *gas = Gas::new_spent_with_reservoir(evm.ctx().tx().gas_limit(), reservoir);
 
         if instruction_result.is_ok_or_revert() {
             gas.erase_cost(remaining);
@@ -208,6 +219,22 @@ where
         // do not refund l1 messages.
         if !evm.ctx().tx().is_l1_msg() && instruction_result.is_ok() {
             gas.record_refund(refunded);
+        }
+
+        if instruction_result.is_ok() {
+            gas.set_state_gas_spent(state_gas_spent);
+        } else {
+            gas.set_state_gas_spent(0);
+        }
+
+        if !instruction_result.is_ok() {
+            gas.set_reservoir(reservoir.saturating_add_signed(state_gas_spent));
+        }
+
+        if create_failed && evm.ctx().cfg().is_amsterdam_eip8037_enabled() {
+            let ctx = evm.ctx();
+            let state_gas_charged = ctx.cfg().gas_params().create_state_gas();
+            gas.refill_reservoir(state_gas_charged);
         }
 
         Ok(())
@@ -225,6 +252,34 @@ where
             return;
         }
         self.mainnet.eip7623_check_gas_floor(evm, exec_result, init_and_floor_gas)
+    }
+
+    #[inline]
+    fn post_execution(
+        &self,
+        evm: &mut Self::Evm,
+        exec_result: &mut <<Self::Evm as EvmTr>::Frame as FrameTr>::FrameResult,
+        init_and_floor_gas: InitialAndFloorGas,
+        eip7702_gas_refund: i64,
+    ) -> Result<ResultGas, Self::Error> {
+        self.refund(evm, exec_result, eip7702_gas_refund);
+
+        let result_init_and_floor_gas = if evm.ctx().tx().is_l1_msg() {
+            InitialAndFloorGas { floor_gas: 0, ..init_and_floor_gas }
+        } else {
+            init_and_floor_gas
+        };
+        let result_gas = post_execution::build_result_gas(
+            exec_result.instruction_result().is_halt(),
+            exec_result.gas(),
+            result_init_and_floor_gas,
+        );
+
+        self.eip7623_check_gas_floor(evm, exec_result, init_and_floor_gas);
+        self.reimburse_caller(evm, exec_result)?;
+        self.reward_beneficiary(evm, exec_result)?;
+
+        Ok(result_gas)
     }
 
     #[inline]
@@ -327,7 +382,10 @@ mod tests {
         let ctx = context();
         let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-        let err = handler.validate_against_state_and_deduct_caller(&mut evm).unwrap_err();
+        let mut init_and_floor_gas = handler.validate(&mut evm)?;
+        let err = handler
+            .validate_against_state_and_deduct_caller(&mut evm, &mut init_and_floor_gas)
+            .unwrap_err();
         assert_eq!(
             err,
             EVMError::Transaction(InvalidTransaction::LackOfFundForMaxFee {
@@ -344,7 +402,8 @@ mod tests {
         let ctx = context().with_funds(MIN_TRANSACTION_COST + L1_DATA_COST);
         let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-        handler.pre_execution(&mut evm)?;
+        let mut init_and_floor_gas = handler.validate(&mut evm)?;
+        handler.pre_execution(&mut evm, &mut init_and_floor_gas)?;
 
         let l1_block_info = evm.ctx().chain.clone();
         assert_ne!(l1_block_info, L1BlockInfo::default());
@@ -358,7 +417,8 @@ mod tests {
 
         let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-        handler.pre_execution(&mut evm)?;
+        let mut init_and_floor_gas = handler.validate(&mut evm)?;
+        handler.pre_execution(&mut evm, &mut init_and_floor_gas)?;
 
         let ctx = evm.ctx_mut();
         let caller_account = ctx.journal_mut().load_account(CALLER)?;
@@ -385,7 +445,7 @@ mod tests {
             },
             0..0,
         ));
-        handler.last_frame_result(&mut evm, &mut result)?;
+        handler.last_frame_result(&mut evm, 0, &mut result)?;
 
         assert_eq!(result.gas(), &gas);
 
@@ -423,7 +483,7 @@ mod tests {
 
         let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-        let gas = Gas::new_spent(21000);
+        let gas = Gas::new_spent_with_reservoir(21000, 0);
         let mut result = FrameResult::Call(CallOutcome::new(
             InterpreterResult {
                 result: InstructionResult::Return,
@@ -432,7 +492,8 @@ mod tests {
             },
             0..0,
         ));
-        handler.pre_execution(&mut evm)?;
+        let mut init_and_floor_gas = handler.validate(&mut evm)?;
+        handler.pre_execution(&mut evm, &mut init_and_floor_gas)?;
         handler.reward_beneficiary(&mut evm, &mut result)?;
 
         let ctx = evm.ctx_mut();
@@ -448,7 +509,8 @@ mod tests {
 
         let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-        handler.pre_execution(&mut evm)?;
+        let mut init_and_floor_gas = handler.validate(&mut evm)?;
+        handler.pre_execution(&mut evm, &mut init_and_floor_gas)?;
 
         Ok(())
     }
@@ -461,8 +523,9 @@ mod tests {
             .modify_cfg_chained(|cfg| cfg.require_l1_data_fee_buffer = true);
         let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+        let mut init_and_floor_gas = handler.validate(&mut evm)?;
         assert!(matches!(
-            handler.pre_execution(&mut evm),
+            handler.pre_execution(&mut evm, &mut init_and_floor_gas),
             Err(EVMError::Transaction(InvalidTransaction::LackOfFundForMaxFee { .. }))
         ));
 
@@ -471,7 +534,8 @@ mod tests {
             .with_funds(MIN_TRANSACTION_COST + L1_DATA_COST + L1_DATA_COST)
             .modify_cfg_chained(|cfg| cfg.require_l1_data_fee_buffer = true);
         let mut evm = ctx.build_scroll();
-        assert!(handler.pre_execution(&mut evm).is_ok());
+        let mut init_and_floor_gas = handler.validate(&mut evm)?;
+        assert!(handler.pre_execution(&mut evm, &mut init_and_floor_gas).is_ok());
 
         Ok(())
     }
@@ -482,7 +546,8 @@ mod tests {
         let ctx = context().with_funds(MIN_TRANSACTION_COST + L1_DATA_COST);
         let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-        assert!(handler.pre_execution(&mut evm).is_ok());
+        let mut init_and_floor_gas = handler.validate(&mut evm)?;
+        assert!(handler.pre_execution(&mut evm, &mut init_and_floor_gas).is_ok());
 
         Ok(())
     }
