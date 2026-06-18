@@ -99,7 +99,11 @@ pub fn make_scroll_instruction_table<WIRE: InterpreterTypes, HOST: ScrollContext
 
 /// Creates a static gas table for Scroll instructions.
 pub fn make_scroll_gas_table() -> GasTable {
-    gas_table_spec(SpecId::SHANGHAI)
+    let mut table = gas_table_spec(SpecId::SHANGHAI);
+    
+    table[opcode::SELFDESTRUCT as usize] = 0;
+
+    table
 }
 
 // SHANGHAI OPCODE IMPLEMENTATIONS
