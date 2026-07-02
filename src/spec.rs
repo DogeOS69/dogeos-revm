@@ -1,5 +1,16 @@
 use revm_primitives::hardfork::SpecId;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParseScrollSpecIdError;
+
+impl core::fmt::Display for ParseScrollSpecIdError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("unknown Scroll hardfork name")
+    }
+}
+
+impl core::error::Error for ParseScrollSpecIdError {}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, enumn::N)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -67,18 +78,28 @@ pub mod name {
     pub const GALILEO: &str = "galileo";
 }
 
-impl From<&str> for ScrollSpecId {
-    fn from(name: &str) -> Self {
+impl core::str::FromStr for ScrollSpecId {
+    type Err = ParseScrollSpecIdError;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
         match name {
-            name::SHANGHAI => Self::SHANGHAI,
-            name::BERNOULLI => Self::BERNOULLI,
-            name::CURIE => Self::CURIE,
-            name::DARWIN => Self::DARWIN,
-            name::EUCLID => Self::EUCLID,
-            name::FEYNMAN => Self::FEYNMAN,
-            name::GALILEO => Self::GALILEO,
-            _ => Self::default(),
+            name::SHANGHAI => Ok(Self::SHANGHAI),
+            name::BERNOULLI => Ok(Self::BERNOULLI),
+            name::CURIE => Ok(Self::CURIE),
+            name::DARWIN => Ok(Self::DARWIN),
+            name::EUCLID => Ok(Self::EUCLID),
+            name::FEYNMAN => Ok(Self::FEYNMAN),
+            name::GALILEO => Ok(Self::GALILEO),
+            _ => Err(ParseScrollSpecIdError),
         }
+    }
+}
+
+impl TryFrom<&str> for ScrollSpecId {
+    type Error = ParseScrollSpecIdError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.parse()
     }
 }
 
@@ -103,5 +124,52 @@ mod tests {
     #[test]
     fn default_spec_is_feynman() {
         assert_eq!(ScrollSpecId::default(), ScrollSpecId::FEYNMAN);
+    }
+
+    #[test]
+    fn parses_known_spec_names() {
+        for (name, expected) in [
+            (name::SHANGHAI, ScrollSpecId::SHANGHAI),
+            (name::BERNOULLI, ScrollSpecId::BERNOULLI),
+            (name::CURIE, ScrollSpecId::CURIE),
+            (name::DARWIN, ScrollSpecId::DARWIN),
+            (name::EUCLID, ScrollSpecId::EUCLID),
+            (name::FEYNMAN, ScrollSpecId::FEYNMAN),
+            (name::GALILEO, ScrollSpecId::GALILEO),
+        ] {
+            assert_eq!(name.parse::<ScrollSpecId>(), Ok(expected));
+            assert_eq!(ScrollSpecId::try_from(name), Ok(expected));
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_spec_names() {
+        assert_eq!("feynmann".parse::<ScrollSpecId>(), Err(ParseScrollSpecIdError));
+        assert_eq!(ScrollSpecId::try_from(""), Err(ParseScrollSpecIdError));
+    }
+
+    #[test]
+    fn scroll_spec_order_matches_activation_order() {
+        assert!(ScrollSpecId::SHANGHAI < ScrollSpecId::BERNOULLI);
+        assert!(ScrollSpecId::BERNOULLI < ScrollSpecId::CURIE);
+        assert!(ScrollSpecId::CURIE < ScrollSpecId::DARWIN);
+        assert!(ScrollSpecId::DARWIN < ScrollSpecId::EUCLID);
+        assert!(ScrollSpecId::EUCLID < ScrollSpecId::FEYNMAN);
+        assert!(ScrollSpecId::FEYNMAN < ScrollSpecId::GALILEO);
+    }
+
+    #[test]
+    fn all_scroll_specs_use_shanghai_eth_base_spec() {
+        for spec in [
+            ScrollSpecId::SHANGHAI,
+            ScrollSpecId::BERNOULLI,
+            ScrollSpecId::CURIE,
+            ScrollSpecId::DARWIN,
+            ScrollSpecId::EUCLID,
+            ScrollSpecId::FEYNMAN,
+            ScrollSpecId::GALILEO,
+        ] {
+            assert_eq!(SpecId::from(spec), SpecId::SHANGHAI);
+        }
     }
 }

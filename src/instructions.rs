@@ -5,13 +5,13 @@ use revm::{
     context::Cfg,
     handler::instructions::InstructionProvider,
     interpreter::{
-        as_u64_saturated, as_usize_or_fail, gas, gas_table, instruction_table,
-        instructions::GasTable,
+        as_u64_saturated, as_usize_or_fail, gas, instruction_table,
+        instructions::{gas_table_spec, GasTable},
         interpreter_types::{InputsTr, MemoryTr, RuntimeFlag, StackTr},
         popn, popn_top, push, require_non_staticcall, Host, Instruction, InstructionContext,
         InstructionExecResult, InstructionResult, InstructionTable, InterpreterTypes,
     },
-    primitives::{address, keccak256, Address, BLOCK_HASH_HISTORY, U256},
+    primitives::{address, hardfork::SpecId, keccak256, Address, BLOCK_HASH_HISTORY, U256},
 };
 use std::rc::Rc;
 
@@ -96,10 +96,11 @@ pub fn make_scroll_instruction_table<WIRE: InterpreterTypes, HOST: ScrollContext
 }
 
 pub fn make_scroll_gas_table() -> GasTable {
-    let mut table = gas_table();
+    let mut table = gas_table_spec(SpecId::SHANGHAI);
 
     // In revm 41, opcode static gas is charged from this gas table before the instruction runs.
-    // Instruction bodies below only charge dynamic gas where Scroll needs custom behavior.
+    // Scroll's Ethereum base spec is Shanghai, and the local instruction bodies only charge
+    // dynamic gas where Scroll needs custom behavior.
     table[opcode::BLOCKHASH as usize] = 20;
     table[opcode::BASEFEE as usize] = 2;
     table[opcode::TSTORE as usize] = 100;
@@ -330,8 +331,8 @@ mod tests {
     use revm::{
         bytecode::{opcode::*, Bytecode},
         database::{EmptyDB, InMemoryDB},
-        interpreter::{InstructionContext, Interpreter},
-        primitives::{Bytes, U256},
+        interpreter::{Host, InstructionContext, Interpreter},
+        primitives::{Address, Bytes, U256},
         DatabaseRef,
     };
     use rstest::rstest;
@@ -423,6 +424,65 @@ mod tests {
 
         let actual_gas_used = interpreter.gas.used();
         assert_eq!(actual_gas_used, expected_gas_used);
+    }
+
+    #[test]
+    fn test_gas_table_uses_shanghai_static_gas() {
+        let table = make_scroll_gas_table();
+
+        assert_eq!(table[SLOAD as usize], 100);
+        assert_eq!(table[BALANCE as usize], 100);
+        assert_eq!(table[EXTCODESIZE as usize], 100);
+        assert_eq!(table[EXTCODECOPY as usize], 100);
+        assert_eq!(table[EXTCODEHASH as usize], 100);
+        assert_eq!(table[CALL as usize], 100);
+        assert_eq!(table[CALLCODE as usize], 100);
+        assert_eq!(table[DELEGATECALL as usize], 100);
+        assert_eq!(table[STATICCALL as usize], 100);
+        assert_eq!(table[SELFDESTRUCT as usize], 0);
+    }
+
+    #[test]
+    fn test_sload_charges_shanghai_warm_and_cold_gas() {
+        let db = EmptyDB::new();
+        let mut context = ScrollContext::scroll().with_db(InMemoryDB::new(db));
+        context.modify_cfg(|cfg| cfg.spec = FEYNMAN);
+        context.load_account_delegated(Address::ZERO).expect("target account should load");
+
+        let instructions = make_scroll_instruction_table();
+        let gas_table = make_scroll_gas_table();
+
+        let bytecode =
+            Bytecode::new_legacy(Bytes::from([PUSH1, 0x00, SLOAD, POP, PUSH1, 0x00, SLOAD, STOP]));
+        let mut interpreter = Interpreter::default().with_bytecode(bytecode);
+        interpreter.run_plain(&instructions, &gas_table, &mut context);
+
+        // PUSH1 + cold SLOAD + POP + PUSH1 + warm SLOAD.
+        assert_eq!(interpreter.gas.used(), 3 + 2100 + 2 + 3 + 100);
+    }
+
+    #[test]
+    fn test_call_charges_shanghai_static_gas() {
+        let db = EmptyDB::new();
+        let mut context = ScrollContext::scroll().with_db(InMemoryDB::new(db));
+        context.modify_cfg(|cfg| cfg.spec = FEYNMAN);
+
+        let instructions = make_scroll_instruction_table();
+        let gas_table = make_scroll_gas_table();
+
+        let bytecode = Bytecode::new_legacy(Bytes::from([CALL, STOP]));
+        let mut interpreter = Interpreter::default().with_bytecode(bytecode);
+        let _ = interpreter.stack.push(U256::ZERO); // out size
+        let _ = interpreter.stack.push(U256::ZERO); // out offset
+        let _ = interpreter.stack.push(U256::ZERO); // input size
+        let _ = interpreter.stack.push(U256::ZERO); // input offset
+        let _ = interpreter.stack.push(U256::ZERO); // value
+        let _ = interpreter.stack.push(U256::from(0x1234)); // to
+        let _ = interpreter.stack.push(U256::ZERO); // forwarded gas
+        interpreter.run_plain(&instructions, &gas_table, &mut context);
+
+        // CALL static gas + cold account access, with zero forwarded gas.
+        assert_eq!(interpreter.gas.used(), 100 + 2500);
     }
 
     #[test]

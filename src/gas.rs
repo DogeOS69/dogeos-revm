@@ -33,6 +33,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn eip7702_gas_values_match_scroll_schedule() {
+        assert_eq!(eip7702::PER_EMPTY_ACCOUNT_COST, 25_000);
+        assert_eq!(eip7702::PER_EMPTY_ACCOUNT_COST - eip7702::PER_AUTH_BASE_COST, 12_500);
+    }
+
+    #[test]
     fn feynman_enables_scroll_gas_overrides() {
         let params = scroll_gas_params(ScrollSpecId::FEYNMAN);
 

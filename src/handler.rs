@@ -532,8 +532,9 @@ where
         // the account as touched.
         let gas = exec_result.gas();
 
+        let gas_used = gas.used().saturating_sub(gas.reservoir());
         let reward =
-            effective_gas_price.saturating_mul(U256::from(gas.used())).saturating_add(l1_cost);
+            effective_gas_price.saturating_mul(U256::from(gas_used)).saturating_add(l1_cost);
         ctx.journal_mut().balance_incr(beneficiary, reward)?;
 
         Ok(())
@@ -699,6 +700,33 @@ mod tests {
         let ctx = evm.ctx_mut();
         let beneficiary = ctx.journal_mut().load_account(BENEFICIARY)?;
         assert_eq!(beneficiary.info.balance, MIN_TRANSACTION_COST + L1_DATA_COST);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reward_beneficiary_subtracts_reservoir() -> Result<(), Box<dyn core::error::Error>> {
+        let ctx = context()
+            .with_scroll_spec(ScrollSpecId::CURIE)
+            .with_funds(MIN_TRANSACTION_COST + L1_DATA_COST);
+
+        let mut evm = ctx.build_scroll();
+        let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+        let gas = Gas::new_spent_with_reservoir(21000, 5000);
+        let mut result = FrameResult::Call(CallOutcome::new(
+            InterpreterResult {
+                result: InstructionResult::Return,
+                output: Default::default(),
+                gas,
+            },
+            0..0,
+        ));
+        let mut init_and_floor_gas = handler.validate(&mut evm)?;
+        handler.pre_execution(&mut evm, &mut init_and_floor_gas)?;
+        handler.reward_beneficiary(&mut evm, &mut result)?;
+
+        let beneficiary = evm.ctx_mut().journal_mut().load_account(BENEFICIARY)?;
+        assert_eq!(beneficiary.info.balance, U256::from(16000) + L1_DATA_COST);
 
         Ok(())
     }

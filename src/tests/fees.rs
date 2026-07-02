@@ -2,14 +2,17 @@ use crate::{
     builder::ScrollBuilder,
     handler::ScrollHandler,
     l1block::*,
-    test_utils::{context, ScrollContextTestUtils, BENEFICIARY, CALLER},
+    test_utils::{context, ScrollContextTestUtils, BENEFICIARY, CALLER, L1_DATA_COST},
     transaction::SYSTEM_ADDRESS,
     ScrollSpecId,
 };
 use revm::{
-    context::{result::EVMError, ContextTr, JournalTr},
+    context::{
+        result::EVMError, result::ExecutionResult, result::ResultAndState, ContextTr, JournalTr,
+    },
     handler::{EthFrame, EvmTr, FrameResult, Handler},
     interpreter::{CallOutcome, Gas, InstructionResult, InterpreterResult},
+    ExecuteEvm,
 };
 use revm_primitives::U256;
 use std::{boxed::Box, vec};
@@ -133,6 +136,72 @@ fn test_should_deduct_correct_fees_feynman() -> Result<(), Box<dyn core::error::
     // cost is 21k + 6k (applying 2x penalty).
     let balance_diff = initial_funds.saturating_sub(caller_account.data.info.balance);
     assert_eq!(balance_diff, U256::from(27000));
+
+    Ok(())
+}
+
+#[test]
+fn test_successful_curie_transaction_final_fee_accounting(
+) -> Result<(), Box<dyn core::error::Error>> {
+    let initial_funds = U256::from(100_000);
+    let ctx = context().with_funds(initial_funds).with_scroll_spec(ScrollSpecId::CURIE);
+    let tx = ctx.tx.clone();
+    let mut evm = ctx.build_scroll();
+
+    let ResultAndState { result, state } = evm.transact(tx)?;
+
+    match result {
+        ExecutionResult::Success { gas, .. } => assert_eq!(gas.tx_gas_used(), 21_000),
+        result => panic!("expected successful transaction, got {result:?}"),
+    }
+
+    let caller = state.get(&CALLER).expect("caller account should be changed");
+    assert_eq!(caller.info.balance, initial_funds - U256::from(21_000) - L1_DATA_COST);
+
+    let beneficiary = state.get(&BENEFICIARY).expect("beneficiary account should be changed");
+    assert_eq!(beneficiary.info.balance, U256::from(21_000) + L1_DATA_COST);
+
+    Ok(())
+}
+
+#[test]
+fn test_successful_feynman_transaction_final_fee_accounting(
+) -> Result<(), Box<dyn core::error::Error>> {
+    let initial_funds = U256::from(100_000);
+    let compression_ratio = U256::from(5_000_000_000u64);
+    let tx_payload = vec![0u8; 100];
+    let expected_l1_cost = U256::from(6_000);
+
+    let gas_oracle = vec![
+        (L1_BASE_FEE_SLOT, U256::from(1_000_000_000u64)),
+        (L1_BLOB_BASE_FEE_SLOT, U256::from(1_000_000_000u64)),
+        (L1_COMMIT_SCALAR_SLOT, U256::from(10)),
+        (L1_BLOB_SCALAR_SLOT, U256::from(20)),
+        (PENALTY_THRESHOLD_SLOT, U256::from(6_000_000_000u64)),
+        (PENALTY_FACTOR_SLOT, U256::from(2_000_000_000u64)),
+    ];
+
+    let ctx = context()
+        .with_funds(initial_funds)
+        .with_scroll_spec(ScrollSpecId::FEYNMAN)
+        .modify_tx_chained(|tx| tx.compression_ratio = Some(compression_ratio))
+        .with_gas_oracle_config(gas_oracle)
+        .with_tx_payload(tx_payload.into());
+    let tx = ctx.tx.clone();
+    let mut evm = ctx.build_scroll();
+
+    let ResultAndState { result, state } = evm.transact(tx)?;
+
+    match result {
+        ExecutionResult::Success { gas, .. } => assert_eq!(gas.tx_gas_used(), 21_000),
+        result => panic!("expected successful transaction, got {result:?}"),
+    }
+
+    let caller = state.get(&CALLER).expect("caller account should be changed");
+    assert_eq!(caller.info.balance, initial_funds - U256::from(21_000) - expected_l1_cost);
+
+    let beneficiary = state.get(&BENEFICIARY).expect("beneficiary account should be changed");
+    assert_eq!(beneficiary.info.balance, U256::from(21_000) + expected_l1_cost);
 
     Ok(())
 }
