@@ -5,10 +5,11 @@ use revm::{
     context::Cfg,
     handler::instructions::InstructionProvider,
     interpreter::{
-        _count, as_u64_saturated, as_usize_or_fail, gas, gas_or_fail, instruction_table,
+        as_u64_saturated, as_usize_or_fail, gas, gas_table, instruction_table,
+        instructions::GasTable,
         interpreter_types::{InputsTr, MemoryTr, RuntimeFlag, StackTr},
-        popn, popn_top, push, require_non_staticcall, resize_memory, Host, Instruction,
-        InstructionContext, InstructionResult, InstructionTable, InterpreterTypes,
+        popn, popn_top, push, require_non_staticcall, Host, Instruction, InstructionContext,
+        InstructionExecResult, InstructionResult, InstructionTable, InterpreterTypes,
     },
     primitives::{address, keccak256, Address, BLOCK_HASH_HISTORY, U256},
 };
@@ -21,6 +22,7 @@ const DIFFICULTY: U256 = U256::ZERO;
 /// Holds the EVM instruction table for Scroll.
 pub struct ScrollInstructions<WIRE: InterpreterTypes, HOST> {
     pub instruction_table: Rc<InstructionTable<WIRE, HOST>>,
+    pub gas_table: Rc<GasTable>,
 }
 
 impl<IT, CTX> InstructionProvider for ScrollInstructions<IT, CTX>
@@ -34,6 +36,10 @@ where
     fn instruction_table(&self) -> &InstructionTable<Self::InterpreterTypes, Self::Context> {
         &self.instruction_table
     }
+
+    fn gas_table(&self) -> &GasTable {
+        &self.gas_table
+    }
 }
 
 impl<WIRE, HOST> Clone for ScrollInstructions<WIRE, HOST>
@@ -41,7 +47,10 @@ where
     WIRE: InterpreterTypes,
 {
     fn clone(&self) -> Self {
-        Self { instruction_table: self.instruction_table.clone() }
+        Self {
+            instruction_table: self.instruction_table.clone(),
+            gas_table: self.gas_table.clone(),
+        }
     }
 }
 
@@ -51,11 +60,11 @@ where
     HOST: ScrollContextTr,
 {
     pub fn new_mainnet() -> Self {
-        Self::new(make_scroll_instruction_table::<WIRE, HOST>())
+        Self::new(make_scroll_instruction_table::<WIRE, HOST>(), make_scroll_gas_table())
     }
 
-    pub fn new(base_table: InstructionTable<WIRE, HOST>) -> Self {
-        Self { instruction_table: Rc::new(base_table) }
+    pub fn new(base_table: InstructionTable<WIRE, HOST>, gas_table: GasTable) -> Self {
+        Self { instruction_table: Rc::new(base_table), gas_table: Rc::new(gas_table) }
     }
 }
 
@@ -74,16 +83,29 @@ pub fn make_scroll_instruction_table<WIRE: InterpreterTypes, HOST: ScrollContext
 ) -> InstructionTable<WIRE, HOST> {
     let mut table = instruction_table::<WIRE, HOST>();
 
-    // override the instructions
-    // static gas values taken from <https://github.com/bluealloy/revm/blob/v86/crates/interpreter/src/instructions.rs#L84>
-    table[opcode::BLOCKHASH as usize] = Instruction::new(blockhash::<WIRE, HOST>, 20);
-    table[opcode::BASEFEE as usize] = Instruction::new(basefee::<WIRE, HOST>, 2);
-    table[opcode::TSTORE as usize] = Instruction::new(tstore::<WIRE, HOST>, 100);
-    table[opcode::TLOAD as usize] = Instruction::new(tload::<WIRE, HOST>, 100);
-    table[opcode::SELFDESTRUCT as usize] = Instruction::new(selfdestruct::<WIRE, HOST>, 0);
-    table[opcode::MCOPY as usize] = Instruction::new(mcopy::<WIRE, HOST>, 0);
-    table[opcode::DIFFICULTY as usize] = Instruction::new(difficulty::<WIRE, HOST>, 2);
-    table[opcode::CLZ as usize] = Instruction::new(clz::<WIRE, HOST>, 5);
+    table[opcode::BLOCKHASH as usize] = Instruction::new(blockhash::<WIRE, HOST>);
+    table[opcode::BASEFEE as usize] = Instruction::new(basefee::<WIRE, HOST>);
+    table[opcode::TSTORE as usize] = Instruction::new(tstore::<WIRE, HOST>);
+    table[opcode::TLOAD as usize] = Instruction::new(tload::<WIRE, HOST>);
+    table[opcode::SELFDESTRUCT as usize] = Instruction::new(selfdestruct::<WIRE, HOST>);
+    table[opcode::MCOPY as usize] = Instruction::new(mcopy::<WIRE, HOST>);
+    table[opcode::DIFFICULTY as usize] = Instruction::new(difficulty::<WIRE, HOST>);
+    table[opcode::CLZ as usize] = Instruction::new(clz::<WIRE, HOST>);
+
+    table
+}
+
+pub fn make_scroll_gas_table() -> GasTable {
+    let mut table = gas_table();
+
+    table[opcode::BLOCKHASH as usize] = 20;
+    table[opcode::BASEFEE as usize] = 2;
+    table[opcode::TSTORE as usize] = 100;
+    table[opcode::TLOAD as usize] = 100;
+    table[opcode::SELFDESTRUCT as usize] = 0;
+    table[opcode::MCOPY as usize] = 0;
+    table[opcode::DIFFICULTY as usize] = 2;
+    table[opcode::CLZ as usize] = 5;
 
     table
 }
@@ -96,7 +118,9 @@ pub fn make_scroll_instruction_table<WIRE: InterpreterTypes, HOST: ScrollContext
 /// If the requested block number is the current block number, a future block number or a block
 /// number older than `BLOCK_HASH_HISTORY` we return 0.
 /// Gas is accounted in the interpreter <https://github.com/bluealloy/revm/blob/fd52a1fb531f4627ea7e69780aab56536533269d/crates/interpreter/src/interpreter.rs#L278>
-fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionContext<'_, H, WIRE>) {
+fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> InstructionExecResult {
     let host = context.host;
     let interpreter = context.interpreter;
 
@@ -108,7 +132,7 @@ fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionCon
     // compute the diff between the current block number and the requested block number
     let Some(diff) = block_number.checked_sub(requested_number) else {
         *number = U256::ZERO;
-        return;
+        return Ok(());
     };
 
     let diff = as_u64_saturated!(diff);
@@ -129,7 +153,7 @@ fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionCon
             // sload assumes that the account is present in the journal
             if host.load_account_delegated(HISTORY_STORAGE_ADDRESS).is_none() {
                 interpreter.halt(InstructionResult::FatalExternalError);
-                return;
+                return Ok(());
             };
 
             // index in system contract ring buffer storage is block_number % HISTORY_SERVE_WINDOW
@@ -138,19 +162,23 @@ fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionCon
 
             let Some(value) = host.sload(HISTORY_STORAGE_ADDRESS, U256::from(index)) else {
                 interpreter.halt(InstructionResult::FatalExternalError);
-                return;
+                return Ok(());
             };
 
             value.data
         }
     };
+    Ok(())
 }
 
 /// Implements the SELFDESTRUCT instruction.
 ///
 /// Halt execution and register account for later deletion.
-fn selfdestruct<WIRE: InterpreterTypes, H: Host>(context: InstructionContext<'_, H, WIRE>) {
+fn selfdestruct<WIRE: InterpreterTypes, H: Host>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> InstructionExecResult {
     context.interpreter.halt(InstructionResult::NotActivated);
+    Ok(())
 }
 
 // CURIE OPCODE IMPLEMENTATIONS
@@ -158,15 +186,18 @@ fn selfdestruct<WIRE: InterpreterTypes, H: Host>(context: InstructionContext<'_,
 
 /// EIP-3198: BASEFEE opcode
 /// Gas is accounted in the interpreter <https://github.com/bluealloy/revm/blob/fd52a1fb531f4627ea7e69780aab56536533269d/crates/interpreter/src/interpreter.rs#L278>
-fn basefee<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionContext<'_, H, WIRE>) {
+fn basefee<WIRE: InterpreterTypes, H: ScrollContextTr>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> InstructionExecResult {
     let host = context.host;
     let interpreter = context.interpreter;
     if !host.cfg().spec().is_enabled_in(ScrollSpecId::CURIE) {
         interpreter.halt(InstructionResult::NotActivated);
-        return;
+        return Ok(());
     }
 
     push!(interpreter, U256::from(host.basefee()));
+    Ok(())
 }
 
 /// Store transient storage tied to the account.
@@ -176,12 +207,14 @@ fn basefee<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionConte
 ///
 /// EIP-1153: Transient storage opcodes
 /// Gas is accounted in the interpreter <https://github.com/bluealloy/revm/blob/fd52a1fb531f4627ea7e69780aab56536533269d/crates/interpreter/src/interpreter.rs#L278>
-fn tstore<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionContext<'_, H, WIRE>) {
+fn tstore<WIRE: InterpreterTypes, H: ScrollContextTr>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> InstructionExecResult {
     let host = context.host;
     let interpreter = context.interpreter;
     if !host.cfg().spec().is_enabled_in(ScrollSpecId::CURIE) {
         interpreter.halt(InstructionResult::NotActivated);
-        return;
+        return Ok(());
     }
 
     require_non_staticcall!(interpreter);
@@ -189,34 +222,40 @@ fn tstore<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionContex
     popn!([index, value], interpreter);
 
     host.tstore(interpreter.input.target_address(), index, value);
+    Ok(())
 }
 
 /// Read transient storage tied to the account.
 ///
 /// EIP-1153: Transient storage opcodes
 /// Gas is accounted in the interpreter <https://github.com/bluealloy/revm/blob/fd52a1fb531f4627ea7e69780aab56536533269d/crates/interpreter/src/interpreter.rs#L278>
-fn tload<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionContext<'_, H, WIRE>) {
+fn tload<WIRE: InterpreterTypes, H: ScrollContextTr>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> InstructionExecResult {
     let host = context.host;
     let interpreter = context.interpreter;
     if !host.cfg().spec().is_enabled_in(ScrollSpecId::CURIE) {
         interpreter.halt(InstructionResult::NotActivated);
-        return;
+        return Ok(());
     }
 
     popn_top!([], index, interpreter);
 
     *index = host.tload(interpreter.input.target_address(), *index);
+    Ok(())
 }
 
 /// Implements the MCOPY instruction.
 ///
 /// EIP-5656: Memory copying instruction that copies memory from one location to another.
-fn mcopy<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionContext<'_, H, WIRE>) {
+fn mcopy<WIRE: InterpreterTypes, H: ScrollContextTr>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> InstructionExecResult {
     let host = context.host;
     let interpreter = context.interpreter;
     if !host.cfg().spec().is_enabled_in(ScrollSpecId::CURIE) {
         interpreter.halt(InstructionResult::NotActivated);
-        return;
+        return Ok(());
     }
 
     popn!([dst, src, len], interpreter);
@@ -224,17 +263,18 @@ fn mcopy<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionContext
     // into usize or fail
     let len = as_usize_or_fail!(interpreter, len);
     // deduce gas
-    gas_or_fail!(interpreter, gas::copy_cost_verylow(len));
+    gas!(interpreter, host.gas_params().mcopy_cost(len));
     if len == 0 {
-        return;
+        return Ok(());
     }
 
     let dst = as_usize_or_fail!(interpreter, dst);
     let src = as_usize_or_fail!(interpreter, src);
     // resize memory
-    resize_memory!(interpreter, max(dst, src), len);
+    interpreter.resize_memory(host.gas_params(), max(dst, src), len)?;
     // copy memory in place
     interpreter.memory.copy(dst, src, len);
+    Ok(())
 }
 
 /// Implements the DIFFICULTY instruction.
@@ -243,25 +283,29 @@ fn mcopy<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionContext
 /// Gas is accounted in the interpreter <https://github.com/bluealloy/revm/blob/fd52a1fb531f4627ea7e69780aab56536533269d/crates/interpreter/src/interpreter.rs#L278>
 pub fn difficulty<WIRE: InterpreterTypes, H: Host + ?Sized>(
     context: InstructionContext<'_, H, WIRE>,
-) {
+) -> InstructionExecResult {
     push!(context.interpreter, DIFFICULTY);
+    Ok(())
 }
 
 /// Implements the CLZ instruction
 ///
 /// EIP-7939 count leading zeros.
-fn clz<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionContext<'_, H, WIRE>) {
+fn clz<WIRE: InterpreterTypes, H: ScrollContextTr>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> InstructionExecResult {
     let host = context.host;
     let interpreter = context.interpreter;
     if !host.cfg().spec().is_enabled_in(ScrollSpecId::GALILEO) {
         interpreter.halt(InstructionResult::NotActivated);
-        return;
+        return Ok(());
     }
 
     popn_top!([], op1, interpreter);
 
     let leading_zeros = op1.leading_zeros();
     *op1 = U256::from(leading_zeros);
+    Ok(())
 }
 
 // HELPER FUNCTIONS
@@ -279,7 +323,7 @@ fn compute_block_hash(chain_id: u64, block_number: u64) -> U256 {
 
 #[cfg(test)]
 mod tests {
-    use super::{clz, compute_block_hash, make_scroll_instruction_table};
+    use super::{clz, compute_block_hash, make_scroll_gas_table, make_scroll_instruction_table};
     use crate::{
         builder::{DefaultScrollContext, ScrollContext},
         instructions::HISTORY_STORAGE_ADDRESS,
@@ -289,7 +333,7 @@ mod tests {
     use revm::{
         bytecode::{opcode::*, Bytecode},
         database::{EmptyDB, InMemoryDB},
-        interpreter::{push, InstructionContext, Interpreter},
+        interpreter::{InstructionContext, Interpreter},
         primitives::{Bytes, U256},
         DatabaseRef,
     };
@@ -306,11 +350,12 @@ mod tests {
         context.modify_cfg(|cfg| cfg.spec = spec);
 
         let instructions = make_scroll_instruction_table();
+        let gas_table = make_scroll_gas_table();
 
         let bytecode = Bytecode::new_legacy(Bytes::from(&[BLOCKHASH, STOP]));
         let mut interpreter = Interpreter::default().with_bytecode(bytecode);
         let _ = interpreter.stack.push(U256::from(target_block));
-        interpreter.run_plain(&instructions, &mut context);
+        interpreter.run_plain(&instructions, &gas_table, &mut context);
 
         let expected = compute_block_hash(chain_id, target_block);
         let actual = interpreter.stack.pop().expect("stack is not empty");
@@ -340,11 +385,12 @@ mod tests {
         });
 
         let instructions = make_scroll_instruction_table();
+        let gas_table = make_scroll_gas_table();
 
         let bytecode = Bytecode::new_legacy(Bytes::from(&[BLOCKHASH, STOP]));
         let mut interpreter = Interpreter::default().with_bytecode(bytecode);
         let _ = interpreter.stack.push(U256::from(target_block));
-        interpreter.run_plain(&instructions, &mut context);
+        interpreter.run_plain(&instructions, &gas_table, &mut context);
 
         let expected: U256 = expected_block_hash.into();
         let actual = interpreter.stack.pop().expect("stack is not empty");
@@ -356,7 +402,7 @@ mod tests {
     #[case(BASEFEE, 2)]
     #[case(TSTORE, 100)]
     #[case(TLOAD, 100)]
-    #[case(MCOPY, 9)]
+    #[case(MCOPY, 6)]
     #[case(SELFDESTRUCT, 0)]
     #[case(DIFFICULTY, 2)]
     fn test_gas_used(#[case] opcode: u8, #[case] expected_gas_used: u64) {
@@ -369,13 +415,14 @@ mod tests {
         context.modify_cfg(|cfg| cfg.spec = spec);
 
         let instructions = make_scroll_instruction_table();
+        let gas_table = make_scroll_gas_table();
 
         let bytecode = Bytecode::new_legacy(Bytes::from([opcode, STOP].to_vec()));
         let mut interpreter = Interpreter::default().with_bytecode(bytecode);
         let _ = interpreter.stack.push(U256::from(1));
         let _ = interpreter.stack.push(U256::from(0));
         let _ = interpreter.stack.push(U256::from(0));
-        interpreter.run_plain(&instructions, &mut context);
+        interpreter.run_plain(&instructions, &gas_table, &mut context);
 
         let actual_gas_used = interpreter.gas.used();
         assert_eq!(actual_gas_used, expected_gas_used);
@@ -429,10 +476,10 @@ mod tests {
         }
 
         for test in test_cases {
-            push!(interpreter, test.value);
+            assert!(interpreter.stack.push(test.value));
             let context =
                 InstructionContext { host: &mut scroll_context, interpreter: &mut interpreter };
-            clz(context);
+            clz(context).expect("clz should succeed");
             let res = interpreter.stack.pop().unwrap();
             assert_eq!(
                 res, test.expected,

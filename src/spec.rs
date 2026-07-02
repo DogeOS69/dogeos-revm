@@ -9,8 +9,8 @@ pub enum ScrollSpecId {
     BERNOULLI = 2,
     CURIE = 3,
     DARWIN = 4,
-    #[default]
     EUCLID = 5,
+    #[default]
     FEYNMAN = 6,
     GALILEO = 7,
 }
@@ -37,13 +37,13 @@ impl ScrollSpecId {
     /// Converts the `ScrollSpecId` to a `SpecId`.
     const fn into_eth_spec_id(self) -> SpecId {
         match self {
-            Self::SHANGHAI |
-            Self::BERNOULLI |
-            Self::CURIE |
-            Self::DARWIN |
-            Self::EUCLID |
-            Self::FEYNMAN |
-            Self::GALILEO => SpecId::SHANGHAI,
+            Self::SHANGHAI
+            | Self::BERNOULLI
+            | Self::CURIE
+            | Self::DARWIN
+            | Self::EUCLID
+            | Self::FEYNMAN
+            | Self::GALILEO => SpecId::SHANGHAI,
         }
     }
 }
@@ -93,5 +93,15 @@ impl From<ScrollSpecId> for &'static str {
             ScrollSpecId::FEYNMAN => name::FEYNMAN,
             ScrollSpecId::GALILEO => name::GALILEO,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_spec_is_feynman() {
+        assert_eq!(ScrollSpecId::default(), ScrollSpecId::FEYNMAN);
     }
 }

@@ -7,7 +7,7 @@ use revm::{
     handler::{EthPrecompiles, PrecompileProvider},
     interpreter::{CallInputs, InterpreterResult},
     precompile::{self, secp256r1, Precompile, PrecompileError, PrecompileId, Precompiles},
-    primitives::Address,
+    primitives::{Address, AddressSet},
 };
 use revm_primitives::hardfork::SpecId;
 
@@ -43,11 +43,11 @@ impl ScrollPrecompileProvider {
     }
 }
 
-/// A helper function that creates a precompile that returns `PrecompileError::Other("Precompile not
+/// A helper function that creates a precompile that returns a fatal not implemented error
 /// implemented".into())` for a given address.
 const fn precompile_not_implemented(id: PrecompileId, address: Address) -> Precompile {
-    Precompile::new(id, address, |_input: &[u8], _gas_limit: u64| {
-        Err(PrecompileError::Other("NotImplemented: Precompile not implemented".into()))
+    Precompile::new(id, address, |_input: &[u8], _gas_limit: u64, _reservoir: u64| {
+        Err(PrecompileError::Fatal("NotImplemented: Precompile not implemented".into()))
     })
 }
 
@@ -137,7 +137,7 @@ where
     }
 
     #[inline]
-    fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
+    fn warm_addresses(&self) -> &AddressSet {
         self.precompile_provider.warm_addresses()
     }
 
@@ -170,12 +170,12 @@ mod tests {
 
         // Euclid version should reject this input
         let precompile = euclid().get(&pair::ADDRESS).expect("precompile exists");
-        let outcome = precompile.execute(&input, u64::MAX);
+        let outcome = precompile.execute(&input, u64::MAX, 0);
         assert!(outcome.is_err());
 
         // Feynman version should accept this input
         let precompile = feynman().get(&pair::ADDRESS).expect("precompile exists");
-        let outcome = precompile.execute(&input, u64::MAX).expect("call succeeds");
+        let outcome = precompile.execute(&input, u64::MAX, 0).expect("call succeeds");
         assert_eq!(outcome.bytes, expected);
     }
 }

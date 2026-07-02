@@ -1,6 +1,9 @@
 use crate::{
     builder::{DefaultScrollContext, ScrollContext},
+    chain::ScrollChainContext,
+    gas::scroll_gas_params,
     l1block::L1_GAS_PRICE_ORACLE_ADDRESS,
+    ScrollSpecId,
 };
 use revm::{
     database::{DbAccount, InMemoryDB},
@@ -42,9 +45,23 @@ pub fn context() -> ScrollContext<InMemoryDB> {
         })
 }
 
+pub fn context_with_spec(spec: ScrollSpecId) -> ScrollContext<InMemoryDB> {
+    context().with_scroll_spec(spec)
+}
+
+pub fn feynman_context() -> ScrollContext<InMemoryDB> {
+    context_with_spec(ScrollSpecId::FEYNMAN)
+}
+
+pub fn galileo_context() -> ScrollContext<InMemoryDB> {
+    context_with_spec(ScrollSpecId::GALILEO)
+}
+
 pub trait ScrollContextTestUtils {
     fn with_funds(self, funds: U256) -> Self;
     fn with_gas_oracle_config(self, entries: Vec<(U256, U256)>) -> Self;
+    fn with_l1_data_fee_buffer(self, require: bool) -> Self;
+    fn with_scroll_spec(self, spec: ScrollSpecId) -> Self;
     fn with_tx_payload(self, data: Bytes) -> Self;
 }
 
@@ -67,6 +84,20 @@ impl ScrollContextTestUtils for ScrollContext<InMemoryDB> {
                 let _ = db.insert_account_storage(L1_GAS_PRICE_ORACLE_ADDRESS, entry.0, entry.1);
             }
         })
+    }
+
+    fn with_l1_data_fee_buffer(self, require: bool) -> Self {
+        self.modify_chain_chained(|chain| {
+            chain.policy = chain.policy.with_l1_data_fee_buffer(require);
+        })
+    }
+
+    fn with_scroll_spec(self, spec: ScrollSpecId) -> Self {
+        self.modify_cfg_chained(|cfg| {
+            cfg.spec = spec;
+            cfg.set_gas_params(scroll_gas_params(spec));
+        })
+        .modify_chain_chained(|chain| *chain = ScrollChainContext::mainnet())
     }
 
     fn with_tx_payload(self, data: Bytes) -> Self {

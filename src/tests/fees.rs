@@ -16,13 +16,12 @@ use std::{boxed::Box, vec};
 
 #[test]
 fn test_should_deduct_correct_fees_bernoulli() -> Result<(), Box<dyn core::error::Error>> {
-    let ctx = context()
-        .with_funds(U256::from(30_000))
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::BERNOULLI);
+    let ctx = context().with_funds(U256::from(30_000)).with_scroll_spec(ScrollSpecId::BERNOULLI);
     let mut evm = ctx.clone().build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
-    handler.pre_execution(&mut evm).unwrap();
+    let mut init_and_floor_gas = handler.validate(&mut evm)?;
+    handler.pre_execution(&mut evm, &mut init_and_floor_gas).unwrap();
 
     let ctx = evm.ctx_mut();
     let caller_account = ctx.journal_mut().load_account(CALLER)?;
@@ -35,13 +34,12 @@ fn test_should_deduct_correct_fees_bernoulli() -> Result<(), Box<dyn core::error
 
 #[test]
 fn test_should_deduct_correct_fees_curie() -> Result<(), Box<dyn core::error::Error>> {
-    let ctx = context()
-        .with_funds(U256::from(70_000))
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::CURIE);
+    let ctx = context().with_funds(U256::from(70_000)).with_scroll_spec(ScrollSpecId::CURIE);
     let mut evm = ctx.clone().build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
-    handler.pre_execution(&mut evm).unwrap();
+    let mut init_and_floor_gas = handler.validate(&mut evm)?;
+    handler.pre_execution(&mut evm, &mut init_and_floor_gas).unwrap();
 
     let ctx = evm.ctx_mut();
     let caller_account = ctx.journal_mut().load_account(CALLER)?;
@@ -56,7 +54,7 @@ fn test_should_deduct_correct_fees_curie() -> Result<(), Box<dyn core::error::Er
 fn test_no_rollup_fee_for_system_tx() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context()
         .with_funds(U256::from(70_000))
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::CURIE)
+        .with_scroll_spec(ScrollSpecId::CURIE)
         .modify_tx_chained(|tx| {
             tx.base.caller = SYSTEM_ADDRESS;
             tx.base.gas_price = 0
@@ -65,7 +63,8 @@ fn test_no_rollup_fee_for_system_tx() -> Result<(), Box<dyn core::error::Error>>
     let mut evm = ctx.clone().build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
-    handler.pre_execution(&mut evm).unwrap();
+    let mut init_and_floor_gas = handler.validate(&mut evm)?;
+    handler.pre_execution(&mut evm, &mut init_and_floor_gas).unwrap();
 
     let ctx = evm.ctx_mut();
     let caller_account = ctx.journal_mut().load_account(CALLER)?;
@@ -79,12 +78,12 @@ fn test_no_rollup_fee_for_system_tx() -> Result<(), Box<dyn core::error::Error>>
 #[test]
 fn test_reward_beneficiary_system_tx() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context()
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::CURIE)
+        .with_scroll_spec(ScrollSpecId::CURIE)
         .modify_tx_chained(|tx| tx.base.caller = SYSTEM_ADDRESS);
 
     let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-    let gas = Gas::new_spent(21000);
+    let gas = Gas::new_spent_with_reservoir(21000, 0);
     let mut result = FrameResult::Call(CallOutcome::new(
         InterpreterResult { result: InstructionResult::Return, output: Default::default(), gas },
         0..0,
@@ -117,7 +116,7 @@ fn test_should_deduct_correct_fees_feynman() -> Result<(), Box<dyn core::error::
 
     let ctx = context()
         .with_funds(initial_funds)
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::FEYNMAN)
+        .with_scroll_spec(ScrollSpecId::FEYNMAN)
         .modify_tx_chained(|tx| tx.compression_ratio = Some(compression_ratio))
         .with_gas_oracle_config(gas_oracle)
         .with_tx_payload(tx_payload.into());
@@ -125,7 +124,8 @@ fn test_should_deduct_correct_fees_feynman() -> Result<(), Box<dyn core::error::
     let mut evm = ctx.clone().build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
-    handler.pre_execution(&mut evm).unwrap();
+    let mut init_and_floor_gas = handler.validate(&mut evm)?;
+    handler.pre_execution(&mut evm, &mut init_and_floor_gas).unwrap();
 
     let ctx = evm.ctx_mut();
     let caller_account = ctx.journal_mut().load_account(CALLER)?;
