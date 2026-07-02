@@ -98,6 +98,8 @@ pub fn make_scroll_instruction_table<WIRE: InterpreterTypes, HOST: ScrollContext
 pub fn make_scroll_gas_table() -> GasTable {
     let mut table = gas_table();
 
+    // In revm 41, opcode static gas is charged from this gas table before the instruction runs.
+    // Instruction bodies below only charge dynamic gas where Scroll needs custom behavior.
     table[opcode::BLOCKHASH as usize] = 20;
     table[opcode::BASEFEE as usize] = 2;
     table[opcode::TSTORE as usize] = 100;
@@ -117,7 +119,6 @@ pub fn make_scroll_gas_table() -> GasTable {
 ///
 /// If the requested block number is the current block number, a future block number or a block
 /// number older than `BLOCK_HASH_HISTORY` we return 0.
-/// Gas is accounted in the interpreter <https://github.com/bluealloy/revm/blob/fd52a1fb531f4627ea7e69780aab56536533269d/crates/interpreter/src/interpreter.rs#L278>
 fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(
     context: InstructionContext<'_, H, WIRE>,
 ) -> InstructionExecResult {
@@ -185,7 +186,6 @@ fn selfdestruct<WIRE: InterpreterTypes, H: Host>(
 // ================================================================================================
 
 /// EIP-3198: BASEFEE opcode
-/// Gas is accounted in the interpreter <https://github.com/bluealloy/revm/blob/fd52a1fb531f4627ea7e69780aab56536533269d/crates/interpreter/src/interpreter.rs#L278>
 fn basefee<WIRE: InterpreterTypes, H: ScrollContextTr>(
     context: InstructionContext<'_, H, WIRE>,
 ) -> InstructionExecResult {
@@ -206,7 +206,6 @@ fn basefee<WIRE: InterpreterTypes, H: ScrollContextTr>(
 /// so that old state can be reverted if that action is needed.
 ///
 /// EIP-1153: Transient storage opcodes
-/// Gas is accounted in the interpreter <https://github.com/bluealloy/revm/blob/fd52a1fb531f4627ea7e69780aab56536533269d/crates/interpreter/src/interpreter.rs#L278>
 fn tstore<WIRE: InterpreterTypes, H: ScrollContextTr>(
     context: InstructionContext<'_, H, WIRE>,
 ) -> InstructionExecResult {
@@ -228,7 +227,6 @@ fn tstore<WIRE: InterpreterTypes, H: ScrollContextTr>(
 /// Read transient storage tied to the account.
 ///
 /// EIP-1153: Transient storage opcodes
-/// Gas is accounted in the interpreter <https://github.com/bluealloy/revm/blob/fd52a1fb531f4627ea7e69780aab56536533269d/crates/interpreter/src/interpreter.rs#L278>
 fn tload<WIRE: InterpreterTypes, H: ScrollContextTr>(
     context: InstructionContext<'_, H, WIRE>,
 ) -> InstructionExecResult {
@@ -280,7 +278,6 @@ fn mcopy<WIRE: InterpreterTypes, H: ScrollContextTr>(
 /// Implements the DIFFICULTY instruction.
 ///
 /// Pushes the block difficulty(default to 0) onto the stack.
-/// Gas is accounted in the interpreter <https://github.com/bluealloy/revm/blob/fd52a1fb531f4627ea7e69780aab56536533269d/crates/interpreter/src/interpreter.rs#L278>
 pub fn difficulty<WIRE: InterpreterTypes, H: Host + ?Sized>(
     context: InstructionContext<'_, H, WIRE>,
 ) -> InstructionExecResult {

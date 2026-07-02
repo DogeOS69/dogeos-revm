@@ -95,6 +95,8 @@ where
             }
         }
 
+        // Scroll's Ethereum base spec is Shanghai, so EIP-8037 is normally disabled unless
+        // tests or explicit config enable it.
         if !ctx.cfg().is_amsterdam_eip8037_enabled() {
             let cap = ctx.cfg().tx_gas_limit_cap();
             if tx.gas_limit() > cap {
@@ -289,8 +291,8 @@ where
 
         // execute normal checks and transaction processing logic for non-l1-msgs
         if !is_l1_msg {
-            // We deduct caller max balance after minting and before deducing the
-            // l1 cost, max values is already checked in pre_validate but l1 cost wasn't.
+            // The mainnet handler checks and deducts the maximum transaction cost before Scroll
+            // applies the additional L1 data fee below.
             self.mainnet.validate_against_state_and_deduct_caller(evm, init_and_floor_gas)?;
         }
 
@@ -411,7 +413,8 @@ where
         let reservoir = gas.reservoir();
         let state_gas_spent = gas.state_gas_spent();
 
-        // Spend the gas limit. Gas is reimbursed when the tx returns successfully.
+        // Spend the gas limit first. Successful and reverted L1 messages recover unused regular
+        // gas below; halts keep the regular gas spent.
         *gas = Gas::new_spent_with_reservoir(evm.ctx().tx().gas_limit(), reservoir);
 
         if instruction_result.is_ok_or_revert() {

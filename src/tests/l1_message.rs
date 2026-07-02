@@ -17,12 +17,15 @@ use revm::{
         result::{EVMError, ExecutionResult, HaltReason, InvalidTransaction, ResultAndState},
         ContextTr, JournalTr, TransactionType,
     },
+    context_interface::cfg::GasParams,
     handler::{EthFrame, EvmTr, FrameResult, Handler},
-    interpreter::{CallOutcome, Gas, InstructionResult, InterpreterResult},
+    interpreter::{CallOutcome, CreateOutcome, Gas, InstructionResult, InterpreterResult},
     state::Bytecode,
     ExecuteEvm,
 };
-use revm_primitives::{bytes, U256};
+use revm_primitives::{bytes, hardfork::SpecId, U256};
+
+type TestResult = Result<(), Box<dyn core::error::Error>>;
 
 #[test]
 fn test_l1_message_validate_lacking_funds() -> Result<(), Box<dyn core::error::Error>> {
@@ -88,6 +91,65 @@ fn test_l1_message_last_frame_result() -> Result<(), Box<dyn core::error::Error>
     // refund should be 0 for l1 messages.
     gas.set_refund(0);
     assert_eq!(result.gas(), &gas);
+
+    Ok(())
+}
+
+#[test]
+fn test_l1_message_last_frame_result_revert_resets_reservoir() -> TestResult {
+    let ctx = context().modify_tx_chained(|tx| tx.base.tx_type = L1_MESSAGE_TYPE);
+
+    let mut evm = ctx.build_scroll();
+    let mut handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+    let mut gas = Gas::new_with_regular_gas_and_reservoir(21_000, 7);
+    gas.set_spent(10);
+    gas.set_refund(10);
+    gas.set_state_gas_spent(5);
+    let mut result = FrameResult::Call(CallOutcome::new(
+        InterpreterResult { result: InstructionResult::Revert, output: Default::default(), gas },
+        0..0,
+    ));
+
+    handler.last_frame_result(&mut evm, 0, &mut result)?;
+
+    assert_eq!(result.gas().remaining(), 20_990);
+    assert_eq!(result.gas().used(), 10);
+    assert_eq!(result.gas().refunded(), 0);
+    assert_eq!(result.gas().reservoir(), 12);
+    assert_eq!(result.gas().state_gas_spent(), 0);
+
+    Ok(())
+}
+
+#[test]
+fn test_l1_message_last_frame_result_failed_create_refills_reservoir() -> TestResult {
+    let gas_params = GasParams::new_spec(SpecId::AMSTERDAM);
+    let create_state_gas = gas_params.create_state_gas();
+    let ctx = context()
+        .modify_tx_chained(|tx| tx.base.tx_type = L1_MESSAGE_TYPE)
+        .modify_cfg_chained(|cfg| {
+            cfg.enable_amsterdam_eip8037 = true;
+            cfg.set_gas_params(gas_params);
+        });
+
+    let mut evm = ctx.build_scroll();
+    let mut handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+    let mut gas = Gas::new_with_regular_gas_and_reservoir(21_000, 7);
+    gas.set_spent(10);
+    gas.set_refund(10);
+    gas.set_state_gas_spent(5);
+    let mut result = FrameResult::Create(CreateOutcome::new(
+        InterpreterResult { result: InstructionResult::Revert, output: Default::default(), gas },
+        None,
+    ));
+
+    handler.last_frame_result(&mut evm, 0, &mut result)?;
+
+    assert_eq!(result.gas().remaining(), 20_990);
+    assert_eq!(result.gas().used(), 10);
+    assert_eq!(result.gas().refunded(), 0);
+    assert_eq!(result.gas().reservoir(), 7 + 5 + create_state_gas);
+    assert_eq!(result.gas().state_gas_spent(), -(create_state_gas as i64));
 
     Ok(())
 }
