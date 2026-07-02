@@ -31,7 +31,6 @@ pub mod ripemd160 {
 
     /// The shanghai RIPEMD160 precompile is not implemented in the Shanghai hardfork.
     ///
-    /// This precompile is not implemented and will return
-    /// `PrecompileError::Fatal("NotImplemented: Precompile not implemented".into())`.
+    /// This precompile halts the call without aborting the transaction.
     pub const SHANGHAI: Precompile = precompile_not_implemented(PrecompileId::Ripemd160, ADDRESS);
 }

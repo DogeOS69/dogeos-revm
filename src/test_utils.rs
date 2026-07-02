@@ -1,8 +1,7 @@
 use crate::{
     builder::{DefaultScrollContext, ScrollContext},
-    chain::ScrollChainContext,
     gas::scroll_gas_params,
-    l1block::L1_GAS_PRICE_ORACLE_ADDRESS,
+    l1block::{L1BlockInfo, L1_GAS_PRICE_ORACLE_ADDRESS},
     ScrollSpecId,
 };
 use revm::{
@@ -97,7 +96,7 @@ impl ScrollContextTestUtils for ScrollContext<InMemoryDB> {
             cfg.spec = spec;
             cfg.set_gas_params(scroll_gas_params(spec));
         })
-        .modify_chain_chained(|chain| *chain = ScrollChainContext::mainnet())
+        .modify_chain_chained(|chain| chain.l1_block_info = L1BlockInfo::default())
     }
 
     fn with_tx_payload(self, data: Bytes) -> Self {

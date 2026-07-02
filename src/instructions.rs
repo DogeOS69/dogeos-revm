@@ -103,7 +103,7 @@ pub fn make_scroll_gas_table() -> GasTable {
     table[opcode::TSTORE as usize] = 100;
     table[opcode::TLOAD as usize] = 100;
     table[opcode::SELFDESTRUCT as usize] = 0;
-    table[opcode::MCOPY as usize] = 0;
+    table[opcode::MCOPY as usize] = 3;
     table[opcode::DIFFICULTY as usize] = 2;
     table[opcode::CLZ as usize] = 5;
 
@@ -402,7 +402,7 @@ mod tests {
     #[case(BASEFEE, 2)]
     #[case(TSTORE, 100)]
     #[case(TLOAD, 100)]
-    #[case(MCOPY, 6)]
+    #[case(MCOPY, 9)]
     #[case(SELFDESTRUCT, 0)]
     #[case(DIFFICULTY, 2)]
     fn test_gas_used(#[case] opcode: u8, #[case] expected_gas_used: u64) {
@@ -426,6 +426,25 @@ mod tests {
 
         let actual_gas_used = interpreter.gas.used();
         assert_eq!(actual_gas_used, expected_gas_used);
+    }
+
+    #[test]
+    fn test_mcopy_zero_length_charges_static_gas() {
+        let db = EmptyDB::new();
+        let mut context = ScrollContext::scroll().with_db(InMemoryDB::new(db));
+        context.modify_cfg(|cfg| cfg.spec = CURIE);
+
+        let instructions = make_scroll_instruction_table();
+        let gas_table = make_scroll_gas_table();
+
+        let bytecode = Bytecode::new_legacy(Bytes::from([MCOPY, STOP].to_vec()));
+        let mut interpreter = Interpreter::default().with_bytecode(bytecode);
+        let _ = interpreter.stack.push(U256::ZERO);
+        let _ = interpreter.stack.push(U256::ZERO);
+        let _ = interpreter.stack.push(U256::ZERO);
+        interpreter.run_plain(&instructions, &gas_table, &mut context);
+
+        assert_eq!(interpreter.gas.used(), 3);
     }
 
     #[test]

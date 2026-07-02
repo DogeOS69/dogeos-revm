@@ -6,7 +6,9 @@ use revm::{
     context::{Cfg, ContextTr},
     handler::{EthPrecompiles, PrecompileProvider},
     interpreter::{CallInputs, InterpreterResult},
-    precompile::{self, secp256r1, Precompile, PrecompileError, PrecompileId, Precompiles},
+    precompile::{
+        self, secp256r1, Precompile, PrecompileHalt, PrecompileId, PrecompileOutput, Precompiles,
+    },
     primitives::{Address, AddressSet},
 };
 use revm_primitives::hardfork::SpecId;
@@ -43,11 +45,13 @@ impl ScrollPrecompileProvider {
     }
 }
 
-/// A helper function that creates a precompile that returns a fatal not implemented error
-/// implemented".into())` for a given address.
+/// Creates a disabled precompile that halts the call without aborting the transaction.
 const fn precompile_not_implemented(id: PrecompileId, address: Address) -> Precompile {
-    Precompile::new(id, address, |_input: &[u8], _gas_limit: u64, _reservoir: u64| {
-        Err(PrecompileError::Fatal("NotImplemented: Precompile not implemented".into()))
+    Precompile::new(id, address, |_input: &[u8], _gas_limit: u64, reservoir: u64| {
+        Ok(PrecompileOutput::halt(
+            PrecompileHalt::other_static("NotImplemented: Precompile not implemented"),
+            reservoir,
+        ))
     })
 }
 
@@ -157,7 +161,20 @@ impl Default for ScrollPrecompileProvider {
 mod tests {
     use super::*;
     use crate::precompile::bn254::pair;
-    use revm::primitives::hex;
+    use crate::{
+        builder::ScrollBuilder,
+        test_utils::{context, ScrollContextTestUtils, MIN_TRANSACTION_COST, TO},
+    };
+    use revm::primitives::{hex, Bytes, U256};
+    use revm::{
+        bytecode::opcode::*,
+        context::result::ExecutionResult,
+        database::DbAccount,
+        state::{AccountInfo, Bytecode},
+        ExecuteEvm,
+    };
+
+    type TestResult = Result<(), Box<dyn core::error::Error>>;
 
     #[test]
     fn test_bn128_large_input() {
@@ -170,12 +187,50 @@ mod tests {
 
         // Euclid version should reject this input
         let precompile = euclid().get(&pair::ADDRESS).expect("precompile exists");
-        let outcome = precompile.execute(&input, u64::MAX, 0);
-        assert!(outcome.is_err());
+        let outcome = precompile.execute(&input, u64::MAX, 0).expect("call returns output");
+        assert!(matches!(
+            outcome.halt_reason(),
+            Some(PrecompileHalt::Other(msg))
+                if msg == "BN128PairingInputOverflow: input overflow"
+        ));
 
         // Feynman version should accept this input
         let precompile = feynman().get(&pair::ADDRESS).expect("precompile exists");
         let outcome = precompile.execute(&input, u64::MAX, 0).expect("call succeeds");
         assert_eq!(outcome.bytes, expected);
+    }
+
+    #[test]
+    fn test_disabled_precompile_halt_does_not_abort_transaction() -> TestResult {
+        let bytecode = Bytecode::new_legacy(Bytes::from([
+            PUSH1, 0x00, // out size
+            PUSH1, 0x00, // out offset
+            PUSH1, 0x00, // input size
+            PUSH1, 0x00, // input offset
+            PUSH1, 0x00, // value
+            PUSH1, 0x03, // disabled RIPEMD160 precompile
+            PUSH2, 0xff, 0xff, CALL, STOP,
+        ]));
+
+        let ctx = context()
+            .with_scroll_spec(ScrollSpecId::CURIE)
+            .with_funds(MIN_TRANSACTION_COST + U256::from(1_000_000))
+            .modify_tx_chained(|tx| tx.base.gas_limit = 100_000)
+            .modify_db_chained(|db| {
+                db.cache.accounts.insert(
+                    TO,
+                    DbAccount {
+                        info: AccountInfo::default().with_code(bytecode),
+                        ..Default::default()
+                    },
+                );
+            });
+        let tx = ctx.tx.clone();
+        let mut evm = ctx.build_scroll();
+        let result = evm.transact(tx)?;
+
+        assert!(matches!(result.result, ExecutionResult::Success { .. }));
+
+        Ok(())
     }
 }

@@ -4,7 +4,7 @@ use revm::{
         modexp::{berlin_gas_calc, run_inner},
         u64_to_address,
         utilities::right_pad_with_offset,
-        Precompile, PrecompileError, PrecompileId, PrecompileOutput, PrecompileResult,
+        Precompile, PrecompileHalt, PrecompileId, PrecompileOutput, PrecompileResult,
     },
     primitives::{Address, U256},
 };
@@ -23,13 +23,8 @@ pub const GALILEO: Precompile = Precompile::new(PrecompileId::ModExp, ADDRESS, o
 
 /// The bernoulli MODEXP precompile implementation.
 ///
-/// # Errors
-/// - `PrecompileError::Fatal("ModexpBaseOverflow: modexp base overflow".into())` if the base length
-///   is greater than 32 bytes.
-/// - `PrecompileError::Fatal("ModexpExpOverflow: modexp exp overflow".into())` if the exponent
-///   length is greater than 32 bytes.
-/// - `PrecompileError::Fatal("ModexpModOverflow: modexp mod overflow".into())` if the modulus
-///   length is greater than 32 bytes.
+/// Inputs with base, exponent, or modulus lengths greater than 32 bytes halt this precompile call
+/// without aborting the transaction.
 pub fn bernoulli_run(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
     let base_len = U256::from_be_bytes(right_pad_with_offset::<32>(input, 0).into_owned());
     let exp_len = U256::from_be_bytes(right_pad_with_offset::<32>(input, 32).into_owned());
@@ -37,13 +32,22 @@ pub fn bernoulli_run(input: &[u8], gas_limit: u64, reservoir: u64) -> Precompile
 
     // modexp temporarily only accepts inputs of 32 bytes (256 bits) or less
     if base_len > BERNOULLI_LEN_LIMIT {
-        return Err(PrecompileError::Fatal("ModexpBaseOverflow: modexp base overflow".into()));
+        return Ok(PrecompileOutput::halt(
+            PrecompileHalt::other_static("ModexpBaseOverflow: modexp base overflow"),
+            reservoir,
+        ));
     }
     if exp_len > BERNOULLI_LEN_LIMIT {
-        return Err(PrecompileError::Fatal("ModexpExpOverflow: modexp exp overflow".into()));
+        return Ok(PrecompileOutput::halt(
+            PrecompileHalt::other_static("ModexpExpOverflow: modexp exp overflow"),
+            reservoir,
+        ));
     }
     if mod_len > BERNOULLI_LEN_LIMIT {
-        return Err(PrecompileError::Fatal("ModexpModOverflow: modexp mod overflow".into()));
+        return Ok(PrecompileOutput::halt(
+            PrecompileHalt::other_static("ModexpModOverflow: modexp mod overflow"),
+            reservoir,
+        ));
     }
 
     const OSAKA: bool = false;
@@ -129,11 +133,15 @@ mod tests {
         let gas_limit = 100000u64;
 
         // BERNOULLI should reject this (base length > 32)
-        let bernoulli_result = bernoulli_run(&input, gas_limit, 0);
-        assert!(bernoulli_result.is_err(), "BERNOULLI should reject base_len > 32");
+        let bernoulli_output =
+            bernoulli_run(&input, gas_limit, 0).expect("BERNOULLI should halt base_len > 32");
         assert!(
-            matches!(bernoulli_result.unwrap_err(), PrecompileError::Fatal(msg) if msg.contains("ModexpBaseOverflow")),
-            "BERNOULLI should return ModexpBaseOverflow error"
+            matches!(
+                bernoulli_output.halt_reason(),
+                Some(PrecompileHalt::Other(msg))
+                    if msg == "ModexpBaseOverflow: modexp base overflow"
+            ),
+            "BERNOULLI should return ModexpBaseOverflow halt"
         );
 
         // Galileo should accept this (no 32-byte limit)

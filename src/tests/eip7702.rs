@@ -1,8 +1,5 @@
 use crate::{
-    builder::ScrollBuilder,
-    handler::ScrollHandler,
-    test_utils::{context_with_spec, feynman_context},
-    ScrollSpecId,
+    builder::ScrollBuilder, handler::ScrollHandler, test_utils::context_with_spec, ScrollSpecId,
 };
 use std::{boxed::Box, vec::Vec};
 
@@ -72,26 +69,29 @@ fn eip7702_context_with_authorizations(
 
 #[test]
 fn test_validate_initial_gas_eip7702_charges_authorization_list() -> TestResult {
-    let mut evm =
-        feynman_context().modify_tx_chained(|tx| tx.base.gas_limit = 100_000).build_scroll();
-    let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-    let gas_without_authorization_list = handler.validate_initial_tx_gas(&mut evm)?;
+    for spec in [ScrollSpecId::EUCLID, ScrollSpecId::FEYNMAN] {
+        let mut evm = context_with_spec(spec)
+            .modify_tx_chained(|tx| tx.base.gas_limit = 100_000)
+            .build_scroll();
+        let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+        let gas_without_authorization_list = handler.validate_initial_tx_gas(&mut evm)?;
 
-    let mut evm = eip7702_context(ScrollSpecId::FEYNMAN, 1).build_scroll();
-    let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-    let gas_with_authorization_list = handler.validate_initial_tx_gas(&mut evm)?;
+        let mut evm = eip7702_context(spec, 1).build_scroll();
+        let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+        let gas_with_authorization_list = handler.validate_initial_tx_gas(&mut evm)?;
 
-    assert_eq!(
-        gas_without_authorization_list.initial_regular_gas() + eip7702::PER_EMPTY_ACCOUNT_COST,
-        gas_with_authorization_list.initial_regular_gas()
-    );
+        assert_eq!(
+            gas_without_authorization_list.initial_regular_gas() + eip7702::PER_EMPTY_ACCOUNT_COST,
+            gas_with_authorization_list.initial_regular_gas()
+        );
+    }
 
     Ok(())
 }
 
 #[test]
-fn test_validate_env_accepts_eip7702_for_feynman_and_galileo() -> TestResult {
-    for spec in [ScrollSpecId::FEYNMAN, ScrollSpecId::GALILEO] {
+fn test_validate_env_accepts_eip7702_for_euclid_and_later() -> TestResult {
+    for spec in [ScrollSpecId::EUCLID, ScrollSpecId::FEYNMAN, ScrollSpecId::GALILEO] {
         let mut evm = eip7702_context(spec, 1).build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
@@ -103,46 +103,61 @@ fn test_validate_env_accepts_eip7702_for_feynman_and_galileo() -> TestResult {
 
 #[test]
 fn test_validate_env_rejects_empty_eip7702_authorization_list() {
-    let mut evm = eip7702_context(ScrollSpecId::FEYNMAN, 0).build_scroll();
+    for spec in [ScrollSpecId::EUCLID, ScrollSpecId::FEYNMAN] {
+        let mut evm = eip7702_context(spec, 0).build_scroll();
+        let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+
+        let err = handler.validate_env(&mut evm).unwrap_err();
+        assert_eq!(err, EVMError::Transaction(InvalidTransaction::EmptyAuthorizationList));
+    }
+}
+
+#[test]
+fn test_validate_env_rejects_eip7702_before_euclid() {
+    let mut evm = eip7702_context(ScrollSpecId::DARWIN, 1).build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     let err = handler.validate_env(&mut evm).unwrap_err();
-    assert_eq!(err, EVMError::Transaction(InvalidTransaction::EmptyAuthorizationList));
+    assert_eq!(err, EVMError::Transaction(InvalidTransaction::Eip7702NotSupported));
 }
 
 #[test]
 fn test_invalid_eip7702_authorization_is_ignored_during_application() -> TestResult {
-    let mut evm = eip7702_context(ScrollSpecId::FEYNMAN, 1).build_scroll();
-    let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-    let mut init_and_floor_gas = InitialAndFloorGas::new(0, 0);
+    for spec in [ScrollSpecId::EUCLID, ScrollSpecId::FEYNMAN] {
+        let mut evm = eip7702_context(spec, 1).build_scroll();
+        let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+        let mut init_and_floor_gas = InitialAndFloorGas::new(0, 0);
 
-    let refund = handler.apply_eip7702_auth_list(&mut evm, &mut init_and_floor_gas)?;
+        let refund = handler.apply_eip7702_auth_list(&mut evm, &mut init_and_floor_gas)?;
 
-    assert_eq!(refund, 0);
-    assert_eq!(init_and_floor_gas.state_refund, 0);
+        assert_eq!(refund, 0);
+        assert_eq!(init_and_floor_gas.state_refund, 0);
+    }
 
     Ok(())
 }
 
 #[test]
 fn test_valid_eip7702_authorization_delegates_empty_account() -> TestResult {
-    let mut evm = eip7702_context_with_authorizations(
-        ScrollSpecId::FEYNMAN,
-        vec![recovered_authorization(U256::from(1), DELEGATE, 0)],
-    )
-    .build_scroll();
-    let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-    let mut init_and_floor_gas = InitialAndFloorGas::new(0, 0);
+    for spec in [ScrollSpecId::EUCLID, ScrollSpecId::FEYNMAN] {
+        let mut evm = eip7702_context_with_authorizations(
+            spec,
+            vec![recovered_authorization(U256::from(1), DELEGATE, 0)],
+        )
+        .build_scroll();
+        let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+        let mut init_and_floor_gas = InitialAndFloorGas::new(0, 0);
 
-    let refund = handler.apply_eip7702_auth_list(&mut evm, &mut init_and_floor_gas)?;
+        let refund = handler.apply_eip7702_auth_list(&mut evm, &mut init_and_floor_gas)?;
 
-    assert_eq!(refund, 0);
-    assert_eq!(init_and_floor_gas.state_refund, 0);
+        assert_eq!(refund, 0);
+        assert_eq!(init_and_floor_gas.state_refund, 0);
 
-    let authority = evm.ctx_mut().journal_mut().load_account(AUTHORITY)?;
-    assert_eq!(authority.data.info.nonce, 1);
-    let code = authority.data.info.code.as_ref().expect("authority has delegated code");
-    assert_eq!(code.eip7702_address(), Some(DELEGATE));
+        let authority = evm.ctx_mut().journal_mut().load_account(AUTHORITY)?;
+        assert_eq!(authority.data.info.nonce, 1);
+        let code = authority.data.info.code.as_ref().expect("authority has delegated code");
+        assert_eq!(code.eip7702_address(), Some(DELEGATE));
+    }
 
     Ok(())
 }

@@ -10,6 +10,5 @@ pub const ADDRESS: Address = u64_to_address(9);
 
 /// The BLAKE2 precompile is not implemented in the SHANGHAI hardfork.
 ///
-/// This precompile is not implemented and will return
-/// `PrecompileError::Fatal("NotImplemented: Precompile not implemented".into())`.
+/// This precompile halts the call without aborting the transaction.
 pub const SHANGHAI: Precompile = precompile_not_implemented(PrecompileId::Blake2F, ADDRESS);

@@ -63,7 +63,7 @@ where
     #[inline]
     fn validate_env(&self, evm: &mut Self::Evm) -> Result<(), Self::Error> {
         // Mirrors revm-handler 41.0.0 environment validation. Deliberate Scroll delta:
-        // EIP-7702 is accepted for Feynman+ while the Ethereum base spec stays Shanghai,
+        // EIP-7702 is accepted for Euclid+ while the Ethereum base spec stays Shanghai,
         // so EIP-4844 and later mainnet envelopes remain rejected.
         let ctx = evm.ctx_ref();
         let eth_spec: SpecId = ctx.cfg().spec().into();
@@ -144,7 +144,7 @@ where
                 )?;
             }
             TransactionType::Eip7702 => {
-                if !ctx.cfg().spec().is_enabled_in(ScrollSpecId::FEYNMAN) {
+                if !ctx.cfg().spec().is_enabled_in(ScrollSpecId::EUCLID) {
                     return Err(InvalidTransaction::Eip7702NotSupported.into());
                 }
                 validate_priority_fee()?;
@@ -250,7 +250,7 @@ where
         if ctx.tx().tx_type() != TransactionType::Eip7702 {
             return Ok(0);
         }
-        if !ctx.cfg().spec().is_enabled_in(ScrollSpecId::FEYNMAN) {
+        if !ctx.cfg().spec().is_enabled_in(ScrollSpecId::EUCLID) {
             return Ok(0);
         }
 
