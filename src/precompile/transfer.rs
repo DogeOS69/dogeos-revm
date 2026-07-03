@@ -3,7 +3,7 @@ use revm::precompile::{
     u64_to_address, PrecompileError, PrecompileId, PrecompileOutput, PrecompileResult,
 };
 use revm_primitives::{Address, U256};
-use std::borrow::Cow;
+use std::{borrow::Cow, format};
 
 /// The Transfer precompile address.
 pub const ADDRESS: Address = u64_to_address(0xff - 2);

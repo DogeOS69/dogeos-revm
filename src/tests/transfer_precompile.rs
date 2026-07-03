@@ -21,7 +21,7 @@ use revm::{
     state::{AccountInfo, Bytecode},
     Context, Database,
 };
-use revm_primitives::{address, Address, Bytes, B256, StorageKey, StorageValue, U256};
+use revm_primitives::{address, Address, Bytes, StorageKey, StorageValue, B256, U256};
 use std::{boxed::Box, fmt, vec, vec::Vec};
 
 const ALLOWED_CALLER: Address = address!("0x0000000000000000000000000000000000001000");
@@ -126,9 +126,7 @@ fn context_with_balances(balances: &[(Address, U256)]) -> ScrollContext<InMemory
 }
 
 fn failing_context() -> ScrollContext<FailingDb> {
-    Context::scroll()
-        .with_db(FailingDb)
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::TSUKI)
+    Context::scroll().with_db(FailingDb).modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::TSUKI)
 }
 
 fn call_transfer_precompile<DB>(
@@ -139,9 +137,8 @@ where
     DB: Database + fmt::Debug,
 {
     let precompiles = precompile::tsuki(call.allow_transfer_caller);
-    let precompile = precompiles
-        .get(&TRANSFER_ADDRESS)
-        .expect("transfer precompile exists in TSUKI");
+    let precompile =
+        precompiles.get(&TRANSFER_ADDRESS).expect("transfer precompile exists in TSUKI");
 
     precompile.call(PrecompileInput {
         data: call.input,
