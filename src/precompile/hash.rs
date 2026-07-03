@@ -31,6 +31,13 @@ pub mod ripemd160 {
     pub const SHANGHAI: Precompile = precompile_not_implemented(PrecompileId::Ripemd160, ADDRESS);
 
     /// The maximum length of the input for the RIPEMD160 precompile in the TSUKI hardfork.
+    ///
+    /// The only use case is for calculating the P2PKH address of a public key, which is hashed by
+    /// RIPEMD160 after being hashed by SHA256. The length of the input is therefore limited to 32
+    /// bytes, which is the length of a SHA256 hash.
+    ///
+    /// Though the RIPEMD160 precompile can accept inputs of arbitrary length, the TSUKI hardfork
+    /// limits the input length to 32 bytes to prevent potential denial-of-service attacks.
     pub const TSUKI_LEN_LIMIT: usize = 32;
 
     /// The TSUKI RIPEMD160 is enabled.

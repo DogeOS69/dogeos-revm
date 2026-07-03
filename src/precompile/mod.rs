@@ -171,7 +171,7 @@ mod tests {
     use std::vec;
 
     #[test]
-    fn test_ripemd160_enabled_only_from_galdogeos() {
+    fn test_ripemd160_enabled_only_from_tsuki() {
         let input = [];
         let expected =
             hex::decode("0000000000000000000000009c1185a5c5e9fc54612808977ee8f548b2258d31")
@@ -192,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn test_galdogeos_ripemd160_accepts_32_byte_input() {
+    fn test_tsuki_ripemd160_accepts_32_byte_input() {
         let input = vec![0xff; hash::ripemd160::TSUKI_LEN_LIMIT];
         let precompile =
             tsuki().get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
@@ -203,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn test_galdogeos_ripemd160_rejects_33_byte_input() {
+    fn test_tsuki_ripemd160_rejects_33_byte_input() {
         let input = vec![0xff; hash::ripemd160::TSUKI_LEN_LIMIT + 1];
         let precompile =
             tsuki().get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
