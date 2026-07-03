@@ -32,6 +32,7 @@ impl ScrollPrecompileProvider {
             ScrollSpecId::EUCLID => euclid(),
             ScrollSpecId::FEYNMAN => feynman(),
             ScrollSpecId::GALILEO => galileo(),
+            ScrollSpecId::TSUKI => tsuki(),
         };
         Self { precompile_provider: EthPrecompiles { precompiles, spec: SpecId::default() }, spec }
     }
@@ -112,6 +113,15 @@ pub(crate) fn galileo() -> &'static Precompiles {
     })
 }
 
+pub(crate) fn tsuki() -> &'static Precompiles {
+    static INSTANCE: OnceBox<Precompiles> = OnceBox::new();
+    INSTANCE.get_or_init(|| {
+        let mut precompiles = galileo().clone();
+        precompiles.extend([hash::ripemd160::TSUKI]);
+        Box::new(precompiles)
+    })
+}
+
 impl<CTX> PrecompileProvider<CTX> for ScrollPrecompileProvider
 where
     CTX: ContextTr<Cfg: Cfg<Spec = ScrollSpecId>>,
@@ -157,7 +167,54 @@ impl Default for ScrollPrecompileProvider {
 mod tests {
     use super::*;
     use crate::precompile::bn254::pair;
-    use revm::primitives::hex;
+    use revm::{precompile::PrecompileError, primitives::hex};
+    use std::vec;
+
+    #[test]
+    fn test_ripemd160_enabled_only_from_tsuki() {
+        let input = [];
+        let expected =
+            hex::decode("0000000000000000000000009c1185a5c5e9fc54612808977ee8f548b2258d31")
+                .unwrap();
+
+        let precompile =
+            galileo().get(&hash::ripemd160::ADDRESS).expect("precompile exists before TSUKI");
+        let outcome = precompile.execute(&input, u64::MAX);
+        assert!(matches!(
+            outcome,
+            Err(PrecompileError::Other(msg)) if msg.contains("NotImplemented")
+        ));
+
+        let precompile =
+            tsuki().get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
+        let outcome = precompile.execute(&input, u64::MAX).expect("call succeeds");
+        assert_eq!(outcome.bytes.as_ref(), expected.as_slice());
+    }
+
+    #[test]
+    fn test_tsuki_ripemd160_accepts_32_byte_input() {
+        let input = vec![0xff; hash::ripemd160::TSUKI_LEN_LIMIT];
+        let precompile =
+            tsuki().get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
+
+        let outcome = precompile.execute(&input, u64::MAX);
+
+        assert!(outcome.is_ok(), "32-byte input should be accepted");
+    }
+
+    #[test]
+    fn test_tsuki_ripemd160_rejects_33_byte_input() {
+        let input = vec![0xff; hash::ripemd160::TSUKI_LEN_LIMIT + 1];
+        let precompile =
+            tsuki().get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
+
+        let outcome = precompile.execute(&input, u64::MAX);
+
+        assert!(matches!(
+            outcome,
+            Err(PrecompileError::Other(msg)) if msg.contains("Ripemd160InputOverflow")
+        ));
+    }
 
     #[test]
     fn test_bn128_large_input() {
