@@ -11,17 +11,20 @@ use revm::{
     state::EvmState,
     Context, Database, Journal, MainContext,
 };
+use revm_primitives::Address;
 
 pub trait ScrollBuilder: Sized {
     type Context;
 
     fn build_scroll(
         self,
+        allow_transfer_caller: Option<Address>,
     ) -> ScrollEvm<Self::Context, (), ScrollInstructions<EthInterpreter, Self::Context>>;
 
     fn build_scroll_with_inspector<INSP>(
         self,
         inspector: INSP,
+        allow_transfer_caller: Option<Address>,
     ) -> ScrollEvm<Self::Context, INSP, ScrollInstructions<EthInterpreter, Self::Context>>;
 }
 
@@ -38,15 +41,17 @@ where
 
     fn build_scroll(
         self,
+        allow_transfer_caller: Option<Address>,
     ) -> ScrollEvm<Self::Context, (), ScrollInstructions<EthInterpreter, Self::Context>> {
-        ScrollEvm::new(self, ())
+        ScrollEvm::new(self, (), allow_transfer_caller)
     }
 
     fn build_scroll_with_inspector<INSP>(
         self,
         inspector: INSP,
+        allow_transfer_caller: Option<Address>,
     ) -> ScrollEvm<Self::Context, INSP, ScrollInstructions<EthInterpreter, Self::Context>> {
-        ScrollEvm::new(self, inspector)
+        ScrollEvm::new(self, inspector, allow_transfer_caller)
     }
 }
 

@@ -1,46 +1,53 @@
 use crate::ScrollSpecId;
-use std::{boxed::Box, string::String};
-
+use alloy_evm::{precompiles::PrecompilesMap, Database};
 use once_cell::race::OnceBox;
 use revm::{
-    context::{Cfg, ContextTr},
-    handler::{EthPrecompiles, PrecompileProvider},
+    context::Cfg,
+    handler::PrecompileProvider,
     interpreter::{CallInputs, InterpreterResult},
     precompile::{self, secp256r1, Precompile, PrecompileError, PrecompileId, Precompiles},
     primitives::Address,
+    Context, Journal,
 };
-use revm_primitives::hardfork::SpecId;
+use std::{boxed::Box, string::String};
 
 mod blake2;
 mod bn254;
 mod hash;
 mod modexp;
+mod transfer;
 
 /// Provides Scroll precompiles, modifying any relevant behaviour.
 #[derive(Debug, Clone)]
 pub struct ScrollPrecompileProvider {
-    precompile_provider: EthPrecompiles,
+    inner: PrecompilesMap,
     spec: ScrollSpecId,
+    allow_transfer_caller: Option<Address>,
 }
 
 impl ScrollPrecompileProvider {
     #[inline]
-    pub fn new_with_spec(spec: ScrollSpecId) -> Self {
-        let precompiles = match spec {
-            ScrollSpecId::SHANGHAI => pre_bernoulli(),
-            ScrollSpecId::BERNOULLI | ScrollSpecId::CURIE | ScrollSpecId::DARWIN => bernoulli(),
-            ScrollSpecId::EUCLID => euclid(),
-            ScrollSpecId::FEYNMAN => feynman(),
-            ScrollSpecId::GALILEO => galileo(),
-            ScrollSpecId::TSUKI => tsuki(),
+    pub fn new_with_spec(spec: ScrollSpecId, allow_transfer_caller: Option<Address>) -> Self {
+        let inner = match spec {
+            ScrollSpecId::SHANGHAI => PrecompilesMap::from_static(pre_bernoulli()),
+            ScrollSpecId::BERNOULLI | ScrollSpecId::CURIE | ScrollSpecId::DARWIN => {
+                PrecompilesMap::from_static(bernoulli())
+            }
+            ScrollSpecId::EUCLID => PrecompilesMap::from_static(euclid()),
+            ScrollSpecId::FEYNMAN => PrecompilesMap::from_static(feynman()),
+            ScrollSpecId::GALILEO => PrecompilesMap::from_static(galileo()),
+            ScrollSpecId::TSUKI => tsuki(
+                allow_transfer_caller
+                    .expect("allow_transfer_caller must be provided for TSUKI spec"),
+            ),
         };
-        Self { precompile_provider: EthPrecompiles { precompiles, spec: SpecId::default() }, spec }
+        Self { inner, spec, allow_transfer_caller }
     }
 
-    /// Precompiles getter.
+    /// Precompiles.
     #[inline]
-    pub fn precompiles(&self) -> &'static Precompiles {
-        self.precompile_provider.precompiles
+    pub fn into_precompiles_map(self) -> PrecompilesMap {
+        self.inner
     }
 }
 
@@ -113,62 +120,97 @@ pub(crate) fn galileo() -> &'static Precompiles {
     })
 }
 
-pub(crate) fn tsuki() -> &'static Precompiles {
+pub(crate) fn tsuki(allow_transfer_caller: Address) -> PrecompilesMap {
     static INSTANCE: OnceBox<Precompiles> = OnceBox::new();
-    INSTANCE.get_or_init(|| {
+    let static_precompiles = INSTANCE.get_or_init(|| {
         let mut precompiles = galileo().clone();
         precompiles.extend([hash::ripemd160::TSUKI]);
         Box::new(precompiles)
-    })
+    });
+
+    PrecompilesMap::from_static(static_precompiles)
+        .with_extended_precompiles([(transfer::ADDRESS, transfer::tsuki(allow_transfer_caller))])
 }
 
-impl<CTX> PrecompileProvider<CTX> for ScrollPrecompileProvider
+impl<BlockEnv, TxEnv, CfgEnv, DB, Chain>
+    PrecompileProvider<Context<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>, Chain>>
+    for ScrollPrecompileProvider
 where
-    CTX: ContextTr<Cfg: Cfg<Spec = ScrollSpecId>>,
+    BlockEnv: revm::context::Block,
+    TxEnv: revm::context::Transaction,
+    CfgEnv: Cfg<Spec = ScrollSpecId>,
+    DB: Database,
 {
     type Output = InterpreterResult;
 
     #[inline]
-    fn set_spec(&mut self, spec: <CTX::Cfg as Cfg>::Spec) -> bool {
+    fn set_spec(&mut self, spec: <CfgEnv as Cfg>::Spec) -> bool {
         if spec == self.spec {
             return false;
         }
-        *self = Self::new_with_spec(spec);
+        *self = Self::new_with_spec(spec, self.allow_transfer_caller);
         true
     }
 
     #[inline]
     fn run(
         &mut self,
-        context: &mut CTX,
+        context: &mut Context<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>, Chain>,
         inputs: &CallInputs,
     ) -> Result<Option<Self::Output>, String> {
-        self.precompile_provider.run(context, inputs)
+        self.inner.run(context, inputs)
     }
 
     #[inline]
     fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
-        self.precompile_provider.warm_addresses()
+        <PrecompilesMap as PrecompileProvider<
+            Context<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>, Chain>,
+        >>::warm_addresses(&self.inner)
     }
 
     #[inline]
     fn contains(&self, address: &Address) -> bool {
-        self.precompile_provider.contains(address)
-    }
-}
-
-impl Default for ScrollPrecompileProvider {
-    fn default() -> Self {
-        Self::new_with_spec(ScrollSpecId::default())
+        <PrecompilesMap as PrecompileProvider<
+            Context<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>, Chain>,
+        >>::contains(&self.inner, address)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::precompile::bn254::pair;
-    use revm::{precompile::PrecompileError, primitives::hex};
+    use crate::{builder::DefaultScrollContext, precompile::bn254::pair};
+    use alloy_evm::{
+        precompiles::{Precompile, PrecompileInput},
+        EvmInternals,
+    };
+    use revm::{
+        context::CfgEnv,
+        precompile::{PrecompileError, PrecompileResult},
+        primitives::{hex, U256},
+        Context,
+    };
     use std::vec;
+
+    fn call_dyn_precompile(
+        precompile: impl Precompile,
+        address: Address,
+        input: &[u8],
+        gas: u64,
+    ) -> PrecompileResult {
+        let mut ctx = Context::scroll().with_cfg(CfgEnv::new_with_spec(ScrollSpecId::TSUKI));
+
+        precompile.call(PrecompileInput {
+            data: input,
+            gas,
+            caller: Address::ZERO,
+            value: U256::ZERO,
+            is_static: false,
+            internals: EvmInternals::from_context(&mut ctx),
+            target_address: address,
+            bytecode_address: address,
+        })
+    }
 
     #[test]
     fn test_ripemd160_enabled_only_from_tsuki() {
@@ -185,19 +227,22 @@ mod tests {
             Err(PrecompileError::Other(msg)) if msg.contains("NotImplemented")
         ));
 
+        let precompiles = tsuki(Address::ZERO);
         let precompile =
-            tsuki().get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
-        let outcome = precompile.execute(&input, u64::MAX).expect("call succeeds");
+            precompiles.get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
+        let outcome = call_dyn_precompile(precompile, hash::ripemd160::ADDRESS, &input, u64::MAX)
+            .expect("call succeeds");
         assert_eq!(outcome.bytes.as_ref(), expected.as_slice());
     }
 
     #[test]
     fn test_tsuki_ripemd160_accepts_32_byte_input() {
         let input = vec![0xff; hash::ripemd160::TSUKI_LEN_LIMIT];
+        let precompiles = tsuki(Address::ZERO);
         let precompile =
-            tsuki().get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
+            precompiles.get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
 
-        let outcome = precompile.execute(&input, u64::MAX);
+        let outcome = call_dyn_precompile(precompile, hash::ripemd160::ADDRESS, &input, u64::MAX);
 
         assert!(outcome.is_ok(), "32-byte input should be accepted");
     }
@@ -205,10 +250,11 @@ mod tests {
     #[test]
     fn test_tsuki_ripemd160_rejects_33_byte_input() {
         let input = vec![0xff; hash::ripemd160::TSUKI_LEN_LIMIT + 1];
+        let precompiles = tsuki(Address::ZERO);
         let precompile =
-            tsuki().get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
+            precompiles.get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
 
-        let outcome = precompile.execute(&input, u64::MAX);
+        let outcome = call_dyn_precompile(precompile, hash::ripemd160::ADDRESS, &input, u64::MAX);
 
         assert!(matches!(
             outcome,
