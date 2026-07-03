@@ -52,6 +52,7 @@ pub const PENALTY_THRESHOLD_SLOT: U256 = U256::from_limbs([9u64, 0, 0, 0]);
 pub const PENALTY_FACTOR_SLOT: U256 = U256::from_limbs([10u64, 0, 0, 0]);
 
 const U64_MAX: U256 = U256::from_limbs([u64::MAX, 0, 0, 0]);
+const U96_MAX: U256 = U256::from_limbs([u64::MAX, u32::MAX as u64, 0, 0]);
 
 // L1 BLOCK INFO
 // ================================================================================================
@@ -324,7 +325,12 @@ impl L1BlockInfo {
                 .unwrap_or_else(|| panic!("compressed size should be set in spec_id={spec_id:?}"));
             self.calculate_tx_l1_cost_galileo(input.len(), spec_id, compressed_size)
         };
-        l1_cost.min(U64_MAX)
+
+        if spec_id.is_enabled_in(ScrollSpecId::TSUKI) {
+            l1_cost.min(U96_MAX)
+        } else {
+            l1_cost.min(U64_MAX)
+        }
     }
 }
 
@@ -354,5 +360,11 @@ mod tests {
         let spec = ScrollSpecId::GALILEO;
         let actual = gpo.calculate_tx_l1_cost_galileo(tx_size, spec, compressed_size);
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_u96_limbs() {
+        let u96_max = U256::from((1u128 << 96) - 1);
+        assert_eq!(U96_MAX, u96_max);
     }
 }

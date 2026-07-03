@@ -13,6 +13,7 @@ pub enum ScrollSpecId {
     EUCLID = 5,
     FEYNMAN = 6,
     GALILEO = 7,
+    TSUKI = 8,
 }
 
 impl ScrollSpecId {
@@ -43,7 +44,8 @@ impl ScrollSpecId {
             Self::DARWIN |
             Self::EUCLID |
             Self::FEYNMAN |
-            Self::GALILEO => SpecId::SHANGHAI,
+            Self::GALILEO |
+            Self::TSUKI => SpecId::SHANGHAI,
         }
     }
 }
@@ -65,6 +67,7 @@ pub mod name {
     pub const EUCLID: &str = "euclid";
     pub const FEYNMAN: &str = "feynman";
     pub const GALILEO: &str = "galileo";
+    pub const TSUKI: &str = "tsuki";
 }
 
 impl From<&str> for ScrollSpecId {
@@ -77,6 +80,7 @@ impl From<&str> for ScrollSpecId {
             name::EUCLID => Self::EUCLID,
             name::FEYNMAN => Self::FEYNMAN,
             name::GALILEO => Self::GALILEO,
+            name::TSUKI => Self::TSUKI,
             _ => Self::default(),
         }
     }
@@ -92,6 +96,7 @@ impl From<ScrollSpecId> for &'static str {
             ScrollSpecId::EUCLID => name::EUCLID,
             ScrollSpecId::FEYNMAN => name::FEYNMAN,
             ScrollSpecId::GALILEO => name::GALILEO,
+            ScrollSpecId::TSUKI => name::TSUKI,
         }
     }
 }
