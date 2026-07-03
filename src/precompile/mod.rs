@@ -15,7 +15,7 @@ mod blake2;
 mod bn254;
 mod hash;
 mod modexp;
-mod transfer;
+pub(crate) mod transfer;
 
 /// Provides Scroll precompiles, modifying any relevant behaviour.
 #[derive(Debug, Clone)]

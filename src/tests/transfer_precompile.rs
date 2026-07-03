@@ -1,6 +1,10 @@
 use crate::{
     builder::{DefaultScrollContext, ScrollContext},
-    precompile::{self, ScrollPrecompileProvider},
+    precompile::{
+        self,
+        transfer::{ADDRESS as TRANSFER_ADDRESS, GAS_COST as TRANSFER_GAS_COST},
+        ScrollPrecompileProvider,
+    },
     ScrollSpecId,
 };
 use alloy_evm::{
@@ -11,15 +15,14 @@ use revm::{
     context::{ContextTr, JournalTr},
     database::{DbAccount, InMemoryDB},
     database_interface::DBErrorMarker,
+    handler::PrecompileProvider,
+    interpreter::{CallInput, CallInputs, CallScheme, CallValue, InstructionResult},
     precompile::{u64_to_address, PrecompileError, PrecompileResult},
     state::{AccountInfo, Bytecode},
     Context, Database,
 };
-use revm_primitives::{address, Address, B256, StorageKey, StorageValue, U256};
+use revm_primitives::{address, Address, Bytes, B256, StorageKey, StorageValue, U256};
 use std::{boxed::Box, fmt, vec, vec::Vec};
-
-const TRANSFER_ADDRESS: Address = u64_to_address(0xfd);
-const TRANSFER_GAS_COST: u64 = 9000;
 
 const ALLOWED_CALLER: Address = address!("0x0000000000000000000000000000000000001000");
 const DISALLOWED_CALLER: Address = address!("0x0000000000000000000000000000000000002000");
@@ -222,7 +225,8 @@ fn callcode_rejected() {
             &mut ctx,
             TransferCall {
                 caller: DISALLOWED_CALLER,
-                bytecode_address: OTHER,
+                target_address: OTHER,
+                bytecode_address: TRANSFER_ADDRESS,
                 ..TransferCall::new(&input)
             },
         ),
@@ -270,7 +274,11 @@ fn delegatecall_beats_caller() {
     expect_other_contains(
         call_transfer_precompile(
             &mut ctx,
-            TransferCall { target_address: OTHER, ..TransferCall::new(&input) },
+            TransferCall {
+                caller: DISALLOWED_CALLER,
+                target_address: OTHER,
+                ..TransferCall::new(&input)
+            },
         ),
         direct_call_error(),
     );
@@ -470,6 +478,18 @@ fn insufficient_funds_reverts() -> Result<(), Box<dyn core::error::Error>> {
 }
 
 #[test]
+fn overflow_payment_returns_reverted_result() -> Result<(), Box<dyn core::error::Error>> {
+    let mut ctx = context(U256::from(1), U256::MAX);
+    let input = transfer_input(FROM, TO, U256::from(1));
+
+    let output = call_transfer_precompile(&mut ctx, TransferCall::new(&input))?;
+
+    assert!(output.reverted);
+    assert_eq!(output.gas_used, TRANSFER_GAS_COST);
+    Ok(())
+}
+
+#[test]
 fn zero_value_transfer() -> Result<(), Box<dyn core::error::Error>> {
     let mut ctx = context(U256::from(10), U256::from(3));
     let input = transfer_input(FROM, TO, U256::ZERO);
@@ -540,7 +560,8 @@ fn db_error_is_fatal() {
 }
 
 #[test]
-fn nonzero_msg_value_is_ignored_by_current_precompile() -> Result<(), Box<dyn core::error::Error>> {
+fn direct_call_nonzero_msg_value_is_ignored_by_current_precompile(
+) -> Result<(), Box<dyn core::error::Error>> {
     let mut ctx = context(U256::from(10), U256::ZERO);
     let input = transfer_input(FROM, TO, U256::from(2));
 
@@ -550,6 +571,47 @@ fn nonzero_msg_value_is_ignored_by_current_precompile() -> Result<(), Box<dyn co
     )?;
 
     assert!(!output.reverted);
+    assert_eq!(balance(&mut ctx, FROM)?, U256::from(8));
+    assert_eq!(balance(&mut ctx, TO)?, U256::from(2));
+    Ok(())
+}
+
+#[test]
+fn provider_dispatches_transfer_precompile() -> Result<(), Box<dyn core::error::Error>> {
+    let mut ctx = context(U256::from(10), U256::ZERO);
+    let input = transfer_input(FROM, TO, U256::from(2));
+    let mut provider =
+        ScrollPrecompileProvider::new_with_spec(ScrollSpecId::TSUKI, Some(ALLOWED_CALLER));
+
+    assert!(<ScrollPrecompileProvider as PrecompileProvider<ScrollContext<InMemoryDB>>>::contains(
+        &provider,
+        &TRANSFER_ADDRESS,
+    ));
+    assert!(<ScrollPrecompileProvider as PrecompileProvider<ScrollContext<InMemoryDB>>>::warm_addresses(
+        &provider,
+    )
+        .any(|address| address == TRANSFER_ADDRESS));
+
+    let result = provider
+        .run(
+            &mut ctx,
+            &CallInputs {
+                input: CallInput::Bytes(Bytes::from(input)),
+                return_memory_offset: 0..0,
+                gas_limit: TRANSFER_GAS_COST,
+                bytecode_address: TRANSFER_ADDRESS,
+                known_bytecode: None,
+                target_address: TRANSFER_ADDRESS,
+                caller: ALLOWED_CALLER,
+                value: CallValue::Transfer(U256::ZERO),
+                scheme: CallScheme::Call,
+                is_static: false,
+            },
+        )
+        .expect("provider run should not fatal")
+        .expect("provider should handle transfer precompile address");
+
+    assert_eq!(result.result, InstructionResult::Return);
     assert_eq!(balance(&mut ctx, FROM)?, U256::from(8));
     assert_eq!(balance(&mut ctx, TO)?, U256::from(2));
     Ok(())
