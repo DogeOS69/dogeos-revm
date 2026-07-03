@@ -29,6 +29,11 @@ fn run(mut input: PrecompileInput<'_>, allow_transfer_caller: Address) -> Precom
     }
 
     // 2. only allow DOGE token contract to call this precompile
+    if !input.is_direct_call() {
+        return Err(PrecompileError::other(
+            "transfer precompile must be called directly, not via delegatecall or callcode",
+        ));
+    }
     if *input.caller() != allow_transfer_caller {
         return Err(PrecompileError::other(
             "transfer precompile can only be called by the allowed caller",
