@@ -15,7 +15,7 @@ use revm_primitives::{eip7702, U256};
 #[test]
 fn test_validate_initial_gas_eip7702() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context();
-    let mut evm = ctx.clone().build_scroll();
+    let mut evm = ctx.clone().build_scroll(None);
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
     let gas_empty_authorization_list = handler.validate_initial_tx_gas(&mut evm)?;
 
@@ -33,7 +33,7 @@ fn test_validate_initial_gas_eip7702() -> Result<(), Box<dyn core::error::Error>
                 U256::ZERO,
             ))]
         })
-        .build_scroll();
+        .build_scroll(None);
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
     let gas_with_authorization_list = handler.validate_initial_tx_gas(&mut evm)?;
 
@@ -57,7 +57,7 @@ fn test_validate_env_eip7702() -> Result<(), Box<dyn core::error::Error>> {
             U256::ZERO,
         ))]
     });
-    let mut evm = ctx.build_scroll();
+    let mut evm = ctx.build_scroll(None);
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     // eip 7702 env checks should pass.

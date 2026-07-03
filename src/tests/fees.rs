@@ -19,7 +19,7 @@ fn test_should_deduct_correct_fees_bernoulli() -> Result<(), Box<dyn core::error
     let ctx = context()
         .with_funds(U256::from(30_000))
         .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::BERNOULLI);
-    let mut evm = ctx.clone().build_scroll();
+    let mut evm = ctx.clone().build_scroll(None);
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     handler.pre_execution(&mut evm).unwrap();
@@ -38,7 +38,7 @@ fn test_should_deduct_correct_fees_curie() -> Result<(), Box<dyn core::error::Er
     let ctx = context()
         .with_funds(U256::from(70_000))
         .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::CURIE);
-    let mut evm = ctx.clone().build_scroll();
+    let mut evm = ctx.clone().build_scroll(None);
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     handler.pre_execution(&mut evm).unwrap();
@@ -62,7 +62,7 @@ fn test_no_rollup_fee_for_system_tx() -> Result<(), Box<dyn core::error::Error>>
             tx.base.gas_price = 0
         });
 
-    let mut evm = ctx.clone().build_scroll();
+    let mut evm = ctx.clone().build_scroll(None);
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     handler.pre_execution(&mut evm).unwrap();
@@ -82,7 +82,7 @@ fn test_reward_beneficiary_system_tx() -> Result<(), Box<dyn core::error::Error>
         .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::CURIE)
         .modify_tx_chained(|tx| tx.base.caller = SYSTEM_ADDRESS);
 
-    let mut evm = ctx.build_scroll();
+    let mut evm = ctx.build_scroll(None);
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
     let gas = Gas::new_spent(21000);
     let mut result = FrameResult::Call(CallOutcome::new(
@@ -122,7 +122,7 @@ fn test_should_deduct_correct_fees_feynman() -> Result<(), Box<dyn core::error::
         .with_gas_oracle_config(gas_oracle)
         .with_tx_payload(tx_payload.into());
 
-    let mut evm = ctx.clone().build_scroll();
+    let mut evm = ctx.clone().build_scroll(None);
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     handler.pre_execution(&mut evm).unwrap();
