@@ -4,6 +4,7 @@ use crate::{
 };
 use std::boxed::Box;
 
+use crate::builder::TsukiEipActivations;
 use revm::{
     context::result::{EVMError, InvalidTransaction},
     handler::{EthFrame, Handler},
@@ -21,6 +22,7 @@ fn context_with_spec_and_gas_limit(
         })
         .modify_tx_chained(|tx| tx.base.gas_limit = gas_limit)
         .modify_block_chained(|block| block.gas_limit = gas_limit)
+        .maybe_with_eip_7825()
 }
 
 #[test]
