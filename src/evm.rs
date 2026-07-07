@@ -31,7 +31,7 @@ impl<CTX: ScrollContextTr, INSP>
         Self(Evm {
             ctx,
             inspector,
-            instruction: ScrollInstructions::new_mainnet(),
+            instruction: ScrollInstructions::new_mainnet_with_spec(spec),
             precompiles: ScrollPrecompileProvider::new_with_spec(spec, allow_transfer_caller),
             frame_stack: FrameStack::new(),
         })
