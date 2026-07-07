@@ -179,14 +179,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{builder::DefaultScrollContext, precompile::bn254::pair};
+    use crate::{
+        builder::{DefaultScrollContext, EuclidEipActivations, FeynmanEipActivations},
+        precompile::bn254::pair,
+    };
     use alloy_evm::{
         precompiles::{Precompile, PrecompileInput},
         EvmInternals,
     };
     use revm::{
         context::CfgEnv,
-        precompile::{PrecompileError, PrecompileResult},
+        context_interface::cfg::gas,
+        precompile::{u64_to_address, PrecompileError, PrecompileId, PrecompileResult},
         primitives::{hex, U256},
         Context,
     };
@@ -210,6 +214,195 @@ mod tests {
             target_address: address,
             bytecode_address: address,
         })
+    }
+
+    fn precompiles_for_spec(spec: ScrollSpecId) -> PrecompilesMap {
+        ScrollPrecompileProvider::new_with_spec(spec, Some(Address::ZERO)).into_precompiles_map()
+    }
+
+    fn expected_precompile_addresses(spec: ScrollSpecId) -> Vec<Address> {
+        let mut addresses = (1..=9).map(u64_to_address).collect::<Vec<_>>();
+
+        if spec >= ScrollSpecId::EUCLID {
+            addresses.push(u64_to_address(256));
+        }
+        if spec >= ScrollSpecId::TSUKI {
+            addresses.push(transfer::ADDRESS);
+        }
+
+        addresses
+    }
+
+    fn expected_precompile_id(address: Address) -> PrecompileId {
+        match address {
+            _ if address == u64_to_address(1) => PrecompileId::EcRec,
+            _ if address == hash::sha256::ADDRESS => PrecompileId::Sha256,
+            _ if address == hash::ripemd160::ADDRESS => PrecompileId::Ripemd160,
+            _ if address == u64_to_address(4) => PrecompileId::Identity,
+            _ if address == modexp::ADDRESS => PrecompileId::ModExp,
+            _ if address == u64_to_address(6) => PrecompileId::Bn254Add,
+            _ if address == u64_to_address(7) => PrecompileId::Bn254Mul,
+            _ if address == pair::ADDRESS => PrecompileId::Bn254Pairing,
+            _ if address == blake2::ADDRESS => PrecompileId::Blake2F,
+            _ if address == u64_to_address(256) => PrecompileId::P256Verify,
+            _ if address == transfer::ADDRESS => transfer::ID.clone(),
+            _ => panic!("unexpected precompile address: {address}"),
+        }
+    }
+
+    fn expected_zero_input_gas(spec: ScrollSpecId, address: Address) -> Option<u64> {
+        match address {
+            _ if address == u64_to_address(1) => Some(3_000),
+            _ if address == hash::sha256::ADDRESS && spec >= ScrollSpecId::BERNOULLI => Some(60),
+            _ if address == hash::ripemd160::ADDRESS && spec >= ScrollSpecId::TSUKI => Some(600),
+            _ if address == u64_to_address(4) => Some(15),
+            _ if address == modexp::ADDRESS && spec >= ScrollSpecId::GALILEO => Some(500),
+            _ if address == modexp::ADDRESS => Some(200),
+            _ if address == u64_to_address(6) => Some(150),
+            _ if address == u64_to_address(7) => Some(6_000),
+            _ if address == pair::ADDRESS => Some(45_000),
+            _ if address == u64_to_address(256) && spec >= ScrollSpecId::GALILEO => Some(6_900),
+            _ if address == u64_to_address(256) => Some(3_450),
+            _ => None,
+        }
+    }
+
+    fn expected_not_implemented(spec: ScrollSpecId, address: Address) -> bool {
+        matches!(
+            address,
+            _ if address == hash::sha256::ADDRESS && spec < ScrollSpecId::BERNOULLI
+        ) || matches!(
+            address,
+            _ if address == hash::ripemd160::ADDRESS && spec < ScrollSpecId::TSUKI
+        ) || address == blake2::ADDRESS
+    }
+
+    fn assert_precompile_zero_input_gas(
+        spec: ScrollSpecId,
+        precompiles: &PrecompilesMap,
+        address: Address,
+        expected_gas: u64,
+    ) {
+        let precompile =
+            precompiles.get(&address).expect("expected precompile should be installed");
+
+        let output = call_dyn_precompile(precompile, address, &[], expected_gas)
+            .unwrap_or_else(|err| panic!("{spec:?} precompile {address} failed: {err:?}"));
+
+        assert_eq!(output.gas_used, expected_gas, "{spec:?} precompile {address}");
+
+        if expected_gas > 0 {
+            let precompile =
+                precompiles.get(&address).expect("expected precompile should be installed");
+            let err = call_dyn_precompile(precompile, address, &[], expected_gas - 1)
+                .expect_err("precompile should reject gas below its expected cost");
+            assert_eq!(err, PrecompileError::OutOfGas, "{spec:?} precompile {address}");
+        }
+    }
+
+    fn assert_precompile_not_implemented(
+        spec: ScrollSpecId,
+        precompiles: &PrecompilesMap,
+        address: Address,
+    ) {
+        let precompile =
+            precompiles.get(&address).expect("expected precompile should be installed");
+        let err = call_dyn_precompile(precompile, address, &[], u64::MAX)
+            .expect_err("precompile should be installed as a disabled placeholder");
+
+        assert!(
+            matches!(&err, PrecompileError::Other(msg) if msg.contains("NotImplemented")),
+            "{spec:?} precompile {address} should be a disabled placeholder, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn spec_activation_matrix_matches_scroll_plan() {
+        for spec in [
+            ScrollSpecId::SHANGHAI,
+            ScrollSpecId::BERNOULLI,
+            ScrollSpecId::CURIE,
+            ScrollSpecId::DARWIN,
+            ScrollSpecId::EUCLID,
+            ScrollSpecId::FEYNMAN,
+            ScrollSpecId::GALILEO,
+            ScrollSpecId::TSUKI,
+        ] {
+            let cfg = Context::scroll()
+                .with_cfg(CfgEnv::new_with_spec(spec))
+                .maybe_with_eip_7702()
+                .maybe_with_eip_7623()
+                .cfg;
+
+            let expected_eip7702 = spec >= ScrollSpecId::EUCLID;
+            let expected_eip7623 = spec >= ScrollSpecId::FEYNMAN;
+
+            assert_eq!(cfg.enable_eip7702, expected_eip7702, "{spec:?} EIP-7702 flag");
+            assert_eq!(cfg.enable_eip7623, expected_eip7623, "{spec:?} EIP-7623 flag");
+            assert_eq!(
+                cfg.gas_params.tx_eip7702_per_empty_account_cost(),
+                if expected_eip7702 { revm_primitives::eip7702::PER_EMPTY_ACCOUNT_COST } else { 0 },
+                "{spec:?} EIP-7702 gas override"
+            );
+            assert_eq!(
+                cfg.gas_params.tx_floor_cost_per_token(),
+                if expected_eip7623 { gas::TOTAL_COST_FLOOR_PER_TOKEN } else { 0 },
+                "{spec:?} EIP-7623 floor token gas override"
+            );
+            assert_eq!(
+                cfg.gas_params.tx_floor_cost_base_gas(),
+                if expected_eip7623 { 21_000 } else { 0 },
+                "{spec:?} EIP-7623 floor base gas override"
+            );
+
+            let precompiles = precompiles_for_spec(spec);
+            let mut actual_addresses = precompiles.addresses().copied().collect::<Vec<_>>();
+            actual_addresses.sort_unstable();
+
+            let mut expected_addresses = expected_precompile_addresses(spec);
+            expected_addresses.sort_unstable();
+
+            assert_eq!(actual_addresses, expected_addresses, "{spec:?} precompile set");
+
+            for address in expected_addresses {
+                let precompile =
+                    precompiles.get(&address).expect("expected precompile should be installed");
+                assert_eq!(
+                    precompile.precompile_id(),
+                    &expected_precompile_id(address),
+                    "{spec:?} precompile id at {address}"
+                );
+
+                if let Some(expected_gas) = expected_zero_input_gas(spec, address) {
+                    assert_precompile_zero_input_gas(spec, &precompiles, address, expected_gas);
+                } else if expected_not_implemented(spec, address) {
+                    assert_precompile_not_implemented(spec, &precompiles, address);
+                }
+            }
+
+            if spec >= ScrollSpecId::TSUKI {
+                let precompile = precompiles
+                    .get(&transfer::ADDRESS)
+                    .expect("transfer precompile should be installed in TSUKI");
+                let input = vec![0; 96];
+                let output =
+                    call_dyn_precompile(precompile, transfer::ADDRESS, &input, transfer::GAS_COST)
+                        .expect("transfer precompile should accept exact gas");
+                assert_eq!(output.gas_used, transfer::GAS_COST);
+
+                let precompile = precompiles
+                    .get(&transfer::ADDRESS)
+                    .expect("transfer precompile should be installed in TSUKI");
+                let err = call_dyn_precompile(
+                    precompile,
+                    transfer::ADDRESS,
+                    &input,
+                    transfer::GAS_COST - 1,
+                )
+                .expect_err("transfer precompile should reject gas below its expected cost");
+                assert_eq!(err, PrecompileError::OutOfGas);
+            }
+        }
     }
 
     #[test]
