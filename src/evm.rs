@@ -36,7 +36,7 @@ where
 {
     fn activate_scroll_evm_config(&mut self) {
         self.modify_cfg(|cfg| {
-            if cfg.spec >= ScrollSpecId::TSUKI && cfg.tx_gas_limit_cap.is_none() {
+            if cfg.spec.is_enabled_in(ScrollSpecId::TSUKI) && cfg.tx_gas_limit_cap.is_none() {
                 cfg.tx_gas_limit_cap = Some(eip7825::TX_GAS_LIMIT_CAP);
             }
         });
