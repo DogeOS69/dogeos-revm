@@ -15,19 +15,18 @@ mod blake2;
 mod bn254;
 mod hash;
 mod modexp;
-pub(crate) mod transfer;
+pub mod transfer;
 
 /// Provides Scroll precompiles, modifying any relevant behaviour.
 #[derive(Debug, Clone)]
 pub struct ScrollPrecompileProvider {
     inner: PrecompilesMap,
     spec: ScrollSpecId,
-    allow_transfer_caller: Option<Address>,
 }
 
 impl ScrollPrecompileProvider {
     #[inline]
-    pub fn new_with_spec(spec: ScrollSpecId, allow_transfer_caller: Option<Address>) -> Self {
+    pub fn new_with_spec(spec: ScrollSpecId) -> Self {
         let inner = match spec {
             ScrollSpecId::SHANGHAI => PrecompilesMap::from_static(pre_bernoulli()),
             ScrollSpecId::BERNOULLI | ScrollSpecId::CURIE | ScrollSpecId::DARWIN => {
@@ -36,12 +35,9 @@ impl ScrollPrecompileProvider {
             ScrollSpecId::EUCLID => PrecompilesMap::from_static(euclid()),
             ScrollSpecId::FEYNMAN => PrecompilesMap::from_static(feynman()),
             ScrollSpecId::GALILEO => PrecompilesMap::from_static(galileo()),
-            ScrollSpecId::TSUKI => tsuki(
-                allow_transfer_caller
-                    .expect("allow_transfer_caller must be provided for TSUKI spec"),
-            ),
+            ScrollSpecId::TSUKI => tsuki(),
         };
-        Self { inner, spec, allow_transfer_caller }
+        Self { inner, spec }
     }
 
     /// Precompiles.
@@ -120,7 +116,7 @@ pub(crate) fn galileo() -> &'static Precompiles {
     })
 }
 
-pub(crate) fn tsuki(allow_transfer_caller: Address) -> PrecompilesMap {
+pub(crate) fn tsuki() -> PrecompilesMap {
     static INSTANCE: OnceBox<Precompiles> = OnceBox::new();
     let static_precompiles = INSTANCE.get_or_init(|| {
         let mut precompiles = galileo().clone();
@@ -129,7 +125,7 @@ pub(crate) fn tsuki(allow_transfer_caller: Address) -> PrecompilesMap {
     });
 
     PrecompilesMap::from_static(static_precompiles)
-        .with_extended_precompiles([(transfer::ADDRESS, transfer::tsuki(allow_transfer_caller))])
+        .with_extended_precompiles([(transfer::ADDRESS, transfer::TRANSFER_PRECOMPILE.clone())])
 }
 
 impl<BlockEnv, TxEnv, CfgEnv, DB, Chain>
@@ -148,7 +144,7 @@ where
         if spec == self.spec {
             return false;
         }
-        *self = Self::new_with_spec(spec, self.allow_transfer_caller);
+        *self = Self::new_with_spec(spec);
         true
     }
 
@@ -201,6 +197,7 @@ mod tests {
 
     fn call_dyn_precompile(
         precompile: impl Precompile,
+        caller: Address,
         address: Address,
         input: &[u8],
         gas: u64,
@@ -210,7 +207,7 @@ mod tests {
         precompile.call(PrecompileInput {
             data: input,
             gas,
-            caller: Address::ZERO,
+            caller,
             value: U256::ZERO,
             is_static: false,
             internals: EvmInternals::from_context(&mut ctx),
@@ -220,7 +217,7 @@ mod tests {
     }
 
     fn precompiles_for_spec(spec: ScrollSpecId) -> PrecompilesMap {
-        ScrollPrecompileProvider::new_with_spec(spec, Some(Address::ZERO)).into_precompiles_map()
+        ScrollPrecompileProvider::new_with_spec(spec).into_precompiles_map()
     }
 
     fn expected_precompile_addresses(spec: ScrollSpecId) -> Vec<Address> {
@@ -289,7 +286,7 @@ mod tests {
         let precompile =
             precompiles.get(&address).expect("expected precompile should be installed");
 
-        let output = call_dyn_precompile(precompile, address, &[], expected_gas)
+        let output = call_dyn_precompile(precompile, Address::ZERO, address, &[], expected_gas)
             .unwrap_or_else(|err| panic!("{spec:?} precompile {address} failed: {err:?}"));
 
         assert_eq!(output.gas_used, expected_gas, "{spec:?} precompile {address}");
@@ -297,8 +294,9 @@ mod tests {
         if expected_gas > 0 {
             let precompile =
                 precompiles.get(&address).expect("expected precompile should be installed");
-            let err = call_dyn_precompile(precompile, address, &[], expected_gas - 1)
-                .expect_err("precompile should reject gas below its expected cost");
+            let err =
+                call_dyn_precompile(precompile, Address::ZERO, address, &[], expected_gas - 1)
+                    .expect_err("precompile should reject gas below its expected cost");
             assert_eq!(err, PrecompileError::OutOfGas, "{spec:?} precompile {address}");
         }
     }
@@ -310,7 +308,7 @@ mod tests {
     ) {
         let precompile =
             precompiles.get(&address).expect("expected precompile should be installed");
-        let err = call_dyn_precompile(precompile, address, &[], u64::MAX)
+        let err = call_dyn_precompile(precompile, Address::ZERO, address, &[], u64::MAX)
             .expect_err("precompile should be installed as a disabled placeholder");
 
         assert!(
@@ -400,9 +398,14 @@ mod tests {
                     .get(&transfer::ADDRESS)
                     .expect("transfer precompile should be installed in TSUKI");
                 let input = vec![0; 96];
-                let output =
-                    call_dyn_precompile(precompile, transfer::ADDRESS, &input, transfer::GAS_COST)
-                        .expect("transfer precompile should accept exact gas");
+                let output = call_dyn_precompile(
+                    precompile,
+                    transfer::NATIVE_DOGE_TOKEN_ADDRESS,
+                    transfer::ADDRESS,
+                    &input,
+                    transfer::GAS_COST,
+                )
+                .expect("transfer precompile should accept exact gas");
                 assert_eq!(output.gas_used, transfer::GAS_COST);
 
                 let precompile = precompiles
@@ -410,6 +413,7 @@ mod tests {
                     .expect("transfer precompile should be installed in TSUKI");
                 let err = call_dyn_precompile(
                     precompile,
+                    transfer::NATIVE_DOGE_TOKEN_ADDRESS,
                     transfer::ADDRESS,
                     &input,
                     transfer::GAS_COST - 1,
@@ -435,22 +439,34 @@ mod tests {
             Err(PrecompileError::Other(msg)) if msg.contains("NotImplemented")
         ));
 
-        let precompiles = tsuki(Address::ZERO);
+        let precompiles = tsuki();
         let precompile =
             precompiles.get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
-        let outcome = call_dyn_precompile(precompile, hash::ripemd160::ADDRESS, &input, u64::MAX)
-            .expect("call succeeds");
+        let outcome = call_dyn_precompile(
+            precompile,
+            Address::ZERO,
+            hash::ripemd160::ADDRESS,
+            &input,
+            u64::MAX,
+        )
+        .expect("call succeeds");
         assert_eq!(outcome.bytes.as_ref(), expected.as_slice());
     }
 
     #[test]
     fn test_tsuki_ripemd160_accepts_32_byte_input() {
         let input = vec![0xff; hash::ripemd160::TSUKI_LEN_LIMIT];
-        let precompiles = tsuki(Address::ZERO);
+        let precompiles = tsuki();
         let precompile =
             precompiles.get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
 
-        let outcome = call_dyn_precompile(precompile, hash::ripemd160::ADDRESS, &input, u64::MAX);
+        let outcome = call_dyn_precompile(
+            precompile,
+            Address::ZERO,
+            hash::ripemd160::ADDRESS,
+            &input,
+            u64::MAX,
+        );
 
         assert!(outcome.is_ok(), "32-byte input should be accepted");
     }
@@ -458,11 +474,17 @@ mod tests {
     #[test]
     fn test_tsuki_ripemd160_rejects_33_byte_input() {
         let input = vec![0xff; hash::ripemd160::TSUKI_LEN_LIMIT + 1];
-        let precompiles = tsuki(Address::ZERO);
+        let precompiles = tsuki();
         let precompile =
             precompiles.get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
 
-        let outcome = call_dyn_precompile(precompile, hash::ripemd160::ADDRESS, &input, u64::MAX);
+        let outcome = call_dyn_precompile(
+            precompile,
+            Address::ZERO,
+            hash::ripemd160::ADDRESS,
+            &input,
+            u64::MAX,
+        );
 
         assert!(matches!(
             outcome,

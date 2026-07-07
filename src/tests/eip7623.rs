@@ -20,7 +20,7 @@ fn test_should_not_apply_eip7623_calldata_gas_for_euclid() {
         .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::EUCLID)
         .modify_tx_chained(|tx| tx.base.gas_limit = GAS_LIMIT)
         .maybe_with_eip_7623();
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     // check call passes.
@@ -40,7 +40,7 @@ fn test_should_apply_eip7623_calldata_gas_for_feynman() {
             tx.base.data = bytes!("0xdead");
         })
         .maybe_with_eip_7623();
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     // check call errors on gas floor more than gas limit.

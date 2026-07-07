@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn test_validate_lacking_funds() -> Result<(), Box<dyn core::error::Error>> {
         let ctx = context();
-        let mut evm = ctx.build_scroll(None);
+        let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
         let err = handler.validate_against_state_and_deduct_caller(&mut evm).unwrap_err();
         assert_eq!(
@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn test_load_account() -> Result<(), Box<dyn core::error::Error>> {
         let ctx = context().with_funds(MIN_TRANSACTION_COST + L1_DATA_COST);
-        let mut evm = ctx.build_scroll(None);
+        let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
         handler.pre_execution(&mut evm)?;
 
@@ -477,7 +477,7 @@ mod tests {
     fn test_deduct_caller() -> Result<(), Box<dyn core::error::Error>> {
         let ctx = context().with_funds(MIN_TRANSACTION_COST + L1_DATA_COST);
 
-        let mut evm = ctx.build_scroll(None);
+        let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
         handler.pre_execution(&mut evm)?;
 
@@ -493,7 +493,7 @@ mod tests {
     fn test_last_frame_result() -> Result<(), Box<dyn core::error::Error>> {
         let ctx = context();
 
-        let mut evm = ctx.build_scroll(None);
+        let mut evm = ctx.build_scroll();
         let mut handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
         let mut gas = Gas::new(21000);
         gas.set_refund(10);
@@ -517,7 +517,7 @@ mod tests {
     fn test_refund() -> Result<(), Box<dyn core::error::Error>> {
         let ctx = context();
 
-        let mut evm = ctx.build_scroll(None);
+        let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
         let mut gas = Gas::new(21000);
         gas.set_refund(10);
@@ -542,7 +542,7 @@ mod tests {
     fn test_reward_beneficiary() -> Result<(), Box<dyn core::error::Error>> {
         let ctx = context().with_funds(MIN_TRANSACTION_COST + L1_DATA_COST);
 
-        let mut evm = ctx.build_scroll(None);
+        let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
         let gas = Gas::new_spent(21000);
         let mut result = FrameResult::Call(CallOutcome::new(
@@ -567,7 +567,7 @@ mod tests {
     fn test_transaction_pre_execution() -> Result<(), Box<dyn core::error::Error>> {
         let ctx = context().with_funds(MIN_TRANSACTION_COST + L1_DATA_COST);
 
-        let mut evm = ctx.build_scroll(None);
+        let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
         handler.pre_execution(&mut evm)?;
 
@@ -580,7 +580,7 @@ mod tests {
         let ctx = context()
             .with_funds(MIN_TRANSACTION_COST + L1_DATA_COST)
             .modify_cfg_chained(|cfg| cfg.require_l1_data_fee_buffer = true);
-        let mut evm = ctx.build_scroll(None);
+        let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
         assert!(matches!(
             handler.pre_execution(&mut evm),
@@ -591,7 +591,7 @@ mod tests {
         let ctx = context()
             .with_funds(MIN_TRANSACTION_COST + L1_DATA_COST + L1_DATA_COST)
             .modify_cfg_chained(|cfg| cfg.require_l1_data_fee_buffer = true);
-        let mut evm = ctx.build_scroll(None);
+        let mut evm = ctx.build_scroll();
         assert!(handler.pre_execution(&mut evm).is_ok());
 
         Ok(())
@@ -601,7 +601,7 @@ mod tests {
     fn test_validate_l1_cost_no_buffer_by_default() -> Result<(), Box<dyn core::error::Error>> {
         // Without buffer: 1x L1_cost should pass
         let ctx = context().with_funds(MIN_TRANSACTION_COST + L1_DATA_COST);
-        let mut evm = ctx.build_scroll(None);
+        let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
         assert!(handler.pre_execution(&mut evm).is_ok());
 

@@ -2,7 +2,10 @@ use crate::{
     builder::{DefaultScrollContext, ScrollContext},
     precompile::{
         self,
-        transfer::{ADDRESS as TRANSFER_ADDRESS, GAS_COST as TRANSFER_GAS_COST},
+        transfer::{
+            ADDRESS as TRANSFER_ADDRESS, GAS_COST as TRANSFER_GAS_COST,
+            NATIVE_DOGE_TOKEN_ADDRESS as ALLOWED_CALLER,
+        },
         ScrollPrecompileProvider,
     },
     ScrollSpecId,
@@ -24,7 +27,6 @@ use revm::{
 use revm_primitives::{address, Address, Bytes, StorageKey, StorageValue, B256, U256};
 use std::{boxed::Box, fmt, vec, vec::Vec};
 
-const ALLOWED_CALLER: Address = address!("0x0000000000000000000000000000000000001000");
 const DISALLOWED_CALLER: Address = address!("0x0000000000000000000000000000000000002000");
 const FROM: Address = address!("0x0000000000000000000000000000000000003000");
 const TO: Address = address!("0x0000000000000000000000000000000000004000");
@@ -32,7 +34,6 @@ const OTHER: Address = address!("0x0000000000000000000000000000000000005000");
 
 #[derive(Clone, Copy)]
 struct TransferCall<'a> {
-    allow_transfer_caller: Address,
     caller: Address,
     target_address: Address,
     bytecode_address: Address,
@@ -45,7 +46,6 @@ struct TransferCall<'a> {
 impl<'a> TransferCall<'a> {
     fn new(input: &'a [u8]) -> Self {
         Self {
-            allow_transfer_caller: ALLOWED_CALLER,
             caller: ALLOWED_CALLER,
             target_address: TRANSFER_ADDRESS,
             bytecode_address: TRANSFER_ADDRESS,
@@ -136,7 +136,7 @@ fn call_transfer_precompile<DB>(
 where
     DB: Database + fmt::Debug,
 {
-    let precompiles = precompile::tsuki(call.allow_transfer_caller);
+    let precompiles = precompile::tsuki();
     let precompile =
         precompiles.get(&TRANSFER_ADDRESS).expect("transfer precompile exists in TSUKI");
 
@@ -577,8 +577,7 @@ fn direct_call_nonzero_msg_value_is_ignored_by_current_precompile(
 fn provider_dispatches_transfer_precompile() -> Result<(), Box<dyn core::error::Error>> {
     let mut ctx = context(U256::from(10), U256::ZERO);
     let input = transfer_input(FROM, TO, U256::from(2));
-    let mut provider =
-        ScrollPrecompileProvider::new_with_spec(ScrollSpecId::TSUKI, Some(ALLOWED_CALLER));
+    let mut provider = ScrollPrecompileProvider::new_with_spec(ScrollSpecId::TSUKI);
 
     assert!(<ScrollPrecompileProvider as PrecompileProvider<ScrollContext<InMemoryDB>>>::contains(
         &provider,
@@ -616,7 +615,7 @@ fn provider_dispatches_transfer_precompile() -> Result<(), Box<dyn core::error::
 
 #[test]
 fn transfer_precompile_present_in_tsuki() {
-    let precompiles = precompile::tsuki(ALLOWED_CALLER);
+    let precompiles = precompile::tsuki();
 
     assert!(precompiles.get(&TRANSFER_ADDRESS).is_some());
 }
@@ -629,10 +628,4 @@ fn transfer_precompile_absent_pre_tsuki() {
 #[test]
 fn transfer_address_is_0xfd() {
     assert_eq!(TRANSFER_ADDRESS, u64_to_address(0xfd));
-}
-
-#[test]
-#[should_panic(expected = "allow_transfer_caller must be provided for TSUKI spec")]
-fn none_caller_panics_or_errors_on_tsuki() {
-    let _ = ScrollPrecompileProvider::new_with_spec(ScrollSpecId::TSUKI, None);
 }

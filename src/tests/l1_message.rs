@@ -28,7 +28,7 @@ use revm_primitives::{bytes, eip7702, hardfork::SpecId, U256};
 #[test]
 fn test_l1_message_validate_lacking_funds() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context().modify_tx_chained(|tx| tx.base.tx_type = L1_MESSAGE_TYPE);
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     // pre execution includes fees deduction, which should be skipped for l1 messages.
@@ -40,7 +40,7 @@ fn test_l1_message_validate_lacking_funds() -> Result<(), Box<dyn core::error::E
 #[test]
 fn test_l1_message_load_accounts() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context().modify_tx_chained(|tx| tx.base.tx_type = L1_MESSAGE_TYPE);
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
     handler.load_accounts(&mut evm)?;
 
@@ -55,7 +55,7 @@ fn test_l1_message_load_accounts() -> Result<(), Box<dyn core::error::Error>> {
 fn test_l1_message_should_not_deduct_caller() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context().modify_tx_chained(|tx| tx.base.tx_type = L1_MESSAGE_TYPE);
 
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
     handler.load_accounts(&mut evm)?;
     handler.validate_against_state_and_deduct_caller(&mut evm)?;
@@ -73,7 +73,7 @@ fn test_l1_message_should_not_deduct_caller() -> Result<(), Box<dyn core::error:
 fn test_l1_message_last_frame_result() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context().modify_tx_chained(|tx| tx.base.tx_type = L1_MESSAGE_TYPE);
 
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
     let mut handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
     let mut gas = Gas::new(21000);
     gas.set_refund(10);
@@ -95,7 +95,7 @@ fn test_l1_message_last_frame_result() -> Result<(), Box<dyn core::error::Error>
 fn test_l1_message_should_not_refund() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context().modify_tx_chained(|tx| tx.base.tx_type = L1_MESSAGE_TYPE);
 
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
     let mut gas = Gas::new(21000);
     gas.set_refund(10);
@@ -116,7 +116,7 @@ fn test_l1_message_should_not_refund() -> Result<(), Box<dyn core::error::Error>
 fn test_l1_message_should_not_reward_beneficiary() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context().modify_tx_chained(|tx| tx.base.tx_type = L1_MESSAGE_TYPE);
 
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
     let gas = Gas::new_spent(21000);
     let mut result = FrameResult::Call(CallOutcome::new(
@@ -141,7 +141,7 @@ fn test_l1_message_should_revert_with_out_of_funds() -> Result<(), Box<dyn core:
         tx.base.value = U256::ONE;
     });
     let tx = ctx.tx.clone();
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
 
     let ResultAndState { result, .. } = evm.transact(tx)?;
 
@@ -167,7 +167,7 @@ fn test_l1_message_should_pass_validation() -> Result<(), Box<dyn core::error::E
         })
         // set the base fee of the block above the L1 message gas price to check it passes.
         .modify_block_chained(|block| block.basefee = 100);
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     handler.validate(&mut evm)?;
@@ -185,7 +185,7 @@ fn test_l1_message_should_pass_pre_execution() -> Result<(), Box<dyn core::error
         .modify_journal_chained(|journal| {
             journal.state.entry(CALLER).or_default().info.nonce += 1;
         });
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     handler.pre_execution(&mut evm)?;
@@ -205,7 +205,7 @@ fn test_l1_message_eip_3607() -> Result<(), Box<dyn core::error::Error>> {
                 LegacyRawBytecode([1u8; 2].into()).into_analyzed().into(),
             ));
         });
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
     let err = handler.pre_execution(&mut evm).unwrap_err();
@@ -234,7 +234,7 @@ fn test_l1_message_should_not_have_floor_gas_as_gas_used() -> Result<(), Box<dyn
             tx.base.value = U256::ONE;
         });
     let tx = ctx.tx.clone();
-    let mut evm = ctx.build_scroll(None);
+    let mut evm = ctx.build_scroll();
     let res = evm.transact(tx.clone())?;
 
     // floor gas is TOTAL_COST_FLOOR_PER_TOKEN * tokens_in_calldata + 21_000 = 22070;
