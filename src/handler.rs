@@ -6,16 +6,18 @@ use std::{boxed::Box, string::ToString};
 
 use revm::{
     context::{
-        result::{HaltReason, InvalidTransaction},
+        result::{HaltReason, InvalidHeader, InvalidTransaction},
         Block, Cfg, ContextTr, JournalTr, Transaction,
     },
+    context_interface::transaction::TransactionType,
     handler::{
-        post_execution, EthFrame, EvmTr, EvmTrError, FrameResult, FrameTr, Handler, MainnetHandler,
+        post_execution, validation, EthFrame, EvmTr, EvmTrError, FrameResult, FrameTr, Handler,
+        MainnetHandler,
     },
     interpreter::{
         interpreter::EthInterpreter, interpreter_action::FrameInit, Gas, InitialAndFloorGas,
     },
-    primitives::U256,
+    primitives::{hardfork::SpecId, U256},
 };
 use revm_inspector::{Inspector, InspectorEvmTr, InspectorHandler};
 
@@ -57,6 +59,15 @@ where
     type Evm = EVM;
     type Error = ERROR;
     type HaltReason = HaltReason;
+
+    #[inline]
+    fn validate_env(&self, evm: &mut Self::Evm) -> Result<(), Self::Error> {
+        if evm.ctx_ref().tx().is_l1_msg() {
+            validate_l1_message_env::<_, Self::Error>(evm.ctx_ref())
+        } else {
+            self.mainnet.validate_env(evm)
+        }
+    }
 
     #[inline]
     fn pre_execution(&self, evm: &mut Self::Evm) -> Result<u64, Self::Error> {
@@ -297,6 +308,121 @@ where
     ERROR: EvmTrError<EVM>,
 {
     type IT = EthInterpreter;
+}
+
+fn validate_l1_message_env<CTX, ERROR>(context: &CTX) -> Result<(), ERROR>
+where
+    CTX: ScrollContextTr,
+    ERROR: From<InvalidHeader> + From<InvalidTransaction>,
+{
+    let spec: SpecId = context.cfg().spec().into();
+    if spec.is_enabled_in(SpecId::MERGE) && context.block().prevrandao().is_none() {
+        return Err(InvalidHeader::PrevrandaoNotSet.into());
+    }
+    if spec.is_enabled_in(SpecId::CANCUN) && context.block().blob_excess_gas_and_price().is_none() {
+        return Err(InvalidHeader::ExcessBlobGasNotSet.into());
+    }
+
+    validate_l1_message_tx_env(context, spec).map_err(Into::into)
+}
+
+fn validate_l1_message_tx_env<CTX: ScrollContextTr>(
+    context: &CTX,
+    spec_id: SpecId,
+) -> Result<(), InvalidTransaction> {
+    // Mirrors revm v103 `crates/handler/src/validation.rs::validate_tx_env`
+    // minus the EIP-7825 cap check for L1 messages. Re-diff this against
+    // upstream validation on every revm bump.
+    let tx = context.tx();
+    let tx_type = TransactionType::from(tx.tx_type());
+
+    let base_fee = if context.cfg().is_base_fee_check_disabled() {
+        None
+    } else {
+        Some(context.block().basefee() as u128)
+    };
+
+    if context.cfg().tx_chain_id_check() {
+        if let Some(chain_id) = tx.chain_id() {
+            if chain_id != context.cfg().chain_id() {
+                return Err(InvalidTransaction::InvalidChainId);
+            }
+        } else if !tx_type.is_legacy() && !tx_type.is_custom() {
+            return Err(InvalidTransaction::MissingChainId);
+        }
+    }
+
+    let disable_priority_fee_check = context.cfg().is_priority_fee_check_disabled();
+
+    match tx_type {
+        TransactionType::Legacy => {
+            validation::validate_legacy_gas_price(tx.gas_price(), base_fee)?;
+        }
+        TransactionType::Eip2930 => {
+            if !spec_id.is_enabled_in(SpecId::BERLIN) {
+                return Err(InvalidTransaction::Eip2930NotSupported);
+            }
+            validation::validate_legacy_gas_price(tx.gas_price(), base_fee)?;
+        }
+        TransactionType::Eip1559 => {
+            if !spec_id.is_enabled_in(SpecId::LONDON) {
+                return Err(InvalidTransaction::Eip1559NotSupported);
+            }
+            validate_priority_fee_for_tx(tx, base_fee, disable_priority_fee_check)?;
+        }
+        TransactionType::Eip4844 => {
+            if !spec_id.is_enabled_in(SpecId::CANCUN) {
+                return Err(InvalidTransaction::Eip4844NotSupported);
+            }
+
+            validate_priority_fee_for_tx(tx, base_fee, disable_priority_fee_check)?;
+            validation::validate_eip4844_tx(
+                tx.blob_versioned_hashes(),
+                tx.max_fee_per_blob_gas(),
+                context.block().blob_gasprice().unwrap_or_default(),
+                context.cfg().max_blobs_per_tx(),
+            )?;
+        }
+        TransactionType::Eip7702 => {
+            if !context.cfg().is_eip7702_enabled() && !spec_id.is_enabled_in(SpecId::PRAGUE) {
+                return Err(InvalidTransaction::Eip7702NotSupported);
+            }
+
+            validate_priority_fee_for_tx(tx, base_fee, disable_priority_fee_check)?;
+
+            if tx.authorization_list_len() == 0 {
+                return Err(InvalidTransaction::EmptyAuthorizationList);
+            }
+        }
+        TransactionType::Custom => {}
+    };
+
+    if !context.cfg().is_block_gas_limit_disabled() && tx.gas_limit() > context.block().gas_limit()
+    {
+        return Err(InvalidTransaction::CallerGasLimitMoreThanBlock);
+    }
+
+    if spec_id.is_enabled_in(SpecId::SHANGHAI) &&
+        tx.kind().is_create() &&
+        tx.input().len() > context.cfg().max_initcode_size()
+    {
+        return Err(InvalidTransaction::CreateInitCodeSizeLimit);
+    }
+
+    Ok(())
+}
+
+fn validate_priority_fee_for_tx<TX: Transaction>(
+    tx: &TX,
+    base_fee: Option<u128>,
+    disable_priority_fee_check: bool,
+) -> Result<(), InvalidTransaction> {
+    validation::validate_priority_fee_tx(
+        tx.max_fee_per_gas(),
+        tx.max_priority_fee_per_gas().unwrap_or_default(),
+        base_fee,
+        disable_priority_fee_check,
+    )
 }
 
 #[cfg(test)]

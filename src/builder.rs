@@ -1,6 +1,9 @@
 use crate::{
-    evm::ScrollEvm, instructions::ScrollInstructions, l1block::L1BlockInfo,
-    transaction::ScrollTxTr, ScrollSpecId, ScrollTransaction,
+    evm::{ScrollEvm, ScrollEvmConfigActivation},
+    instructions::ScrollInstructions,
+    l1block::L1BlockInfo,
+    transaction::ScrollTxTr,
+    ScrollSpecId, ScrollTransaction,
 };
 
 use revm::{
@@ -36,6 +39,7 @@ where
     CFG: Cfg<Spec = ScrollSpecId>,
     DB: Database,
     JOURNAL: JournalTr<Database = DB, State = EvmState>,
+    Self: ScrollEvmConfigActivation,
 {
     type Context = Self;
 

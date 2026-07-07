@@ -180,7 +180,9 @@ where
 mod tests {
     use super::*;
     use crate::{
-        builder::{DefaultScrollContext, EuclidEipActivations, FeynmanEipActivations},
+        builder::{
+            DefaultScrollContext, EuclidEipActivations, FeynmanEipActivations, ScrollBuilder,
+        },
         precompile::bn254::pair,
     };
     use alloy_evm::{
@@ -188,12 +190,13 @@ mod tests {
         EvmInternals,
     };
     use revm::{
-        context::CfgEnv,
+        context::{Cfg, CfgEnv},
         context_interface::cfg::gas,
         precompile::{u64_to_address, PrecompileError, PrecompileId, PrecompileResult},
         primitives::{hex, U256},
         Context,
     };
+    use revm_primitives::eip7825;
     use std::vec;
 
     fn call_dyn_precompile(
@@ -353,6 +356,21 @@ mod tests {
                 cfg.gas_params.tx_floor_cost_base_gas(),
                 if expected_eip7623 { 21_000 } else { 0 },
                 "{spec:?} EIP-7623 floor base gas override"
+            );
+
+            let evm = Context::scroll()
+                .with_cfg(CfgEnv::new_with_spec(spec))
+                .build_scroll(Some(Address::ZERO));
+            let expected_tx_gas_limit_cap =
+                (spec >= ScrollSpecId::TSUKI).then_some(eip7825::TX_GAS_LIMIT_CAP);
+            assert_eq!(
+                evm.0.ctx.cfg.tx_gas_limit_cap, expected_tx_gas_limit_cap,
+                "{spec:?} EIP-7825 cap override"
+            );
+            assert_eq!(
+                evm.0.ctx.cfg.tx_gas_limit_cap(),
+                expected_tx_gas_limit_cap.unwrap_or(u64::MAX),
+                "{spec:?} EIP-7825 effective cap"
             );
 
             let precompiles = precompiles_for_spec(spec);

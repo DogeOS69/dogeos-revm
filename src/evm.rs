@@ -1,18 +1,47 @@
 use crate::{
-    exec::ScrollContextTr, instructions::ScrollInstructions, precompile::ScrollPrecompileProvider,
+    exec::ScrollContextTr, instructions::ScrollInstructions, l1block::L1BlockInfo,
+    precompile::ScrollPrecompileProvider, transaction::ScrollTxTr, ScrollSpecId,
 };
 
 use revm::{
-    context::{Cfg, ContextError, ContextSetters, ContextTr, Evm, FrameStack},
+    context::{
+        Block, Cfg, CfgEnv, ContextError, ContextSetters, ContextTr, Evm, FrameStack, JournalTr,
+        LocalContextTr,
+    },
+    database::Database,
     handler::{
         instructions::InstructionProvider, EthFrame, EvmTr, FrameInitOrResult, FrameTr,
         ItemOrResult, PrecompileProvider,
     },
     interpreter::{interpreter::EthInterpreter, InterpreterResult},
-    Database,
+    state::EvmState,
+    Context,
 };
 use revm_inspector::{Inspector, InspectorEvmTr, JournalExt};
-use revm_primitives::Address;
+use revm_primitives::{eip7825, Address};
+
+/// Activates Scroll-specific configuration during EVM construction.
+pub trait ScrollEvmConfigActivation {
+    fn activate_scroll_evm_config(&mut self);
+}
+
+impl<BLOCK, TX, DB, JOURNAL, LOCAL> ScrollEvmConfigActivation
+    for Context<BLOCK, TX, CfgEnv<ScrollSpecId>, DB, JOURNAL, L1BlockInfo, LOCAL>
+where
+    BLOCK: Block,
+    TX: ScrollTxTr,
+    DB: Database,
+    JOURNAL: JournalTr<Database = DB, State = EvmState>,
+    LOCAL: LocalContextTr,
+{
+    fn activate_scroll_evm_config(&mut self) {
+        self.modify_cfg(|cfg| {
+            if cfg.spec.is_enabled_in(ScrollSpecId::TSUKI) && cfg.tx_gas_limit_cap.is_none() {
+                cfg.tx_gas_limit_cap = Some(eip7825::TX_GAS_LIMIT_CAP);
+            }
+        });
+    }
+}
 
 /// The Scroll Evm instance.
 pub struct ScrollEvm<
@@ -25,8 +54,11 @@ pub struct ScrollEvm<
 
 impl<CTX: ScrollContextTr, INSP>
     ScrollEvm<CTX, INSP, ScrollInstructions<EthInterpreter, CTX>, ScrollPrecompileProvider>
+where
+    CTX: ScrollEvmConfigActivation,
 {
-    pub fn new(ctx: CTX, inspector: INSP, allow_transfer_caller: Option<Address>) -> Self {
+    pub fn new(mut ctx: CTX, inspector: INSP, allow_transfer_caller: Option<Address>) -> Self {
+        ctx.activate_scroll_evm_config();
         let spec = ctx.cfg().spec();
         Self(Evm {
             ctx,
