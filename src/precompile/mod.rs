@@ -181,7 +181,7 @@ mod tests {
     use super::*;
     use crate::{
         builder::{
-            DefaultScrollContext, EuclidEipActivations, FeynmanEipActivations, ScrollBuilder,
+            DefaultScrollContext, EuclidEipActivations, FeynmanEipActivations, TsukiEipActivations,
         },
         precompile::bn254::pair,
     };
@@ -335,10 +335,12 @@ mod tests {
                 .with_cfg(CfgEnv::new_with_spec(spec))
                 .maybe_with_eip_7702()
                 .maybe_with_eip_7623()
+                .maybe_with_eip_7825()
                 .cfg;
 
             let expected_eip7702 = spec >= ScrollSpecId::EUCLID;
             let expected_eip7623 = spec >= ScrollSpecId::FEYNMAN;
+            let expected_eip7825 = spec >= ScrollSpecId::TSUKI;
 
             assert_eq!(cfg.enable_eip7702, expected_eip7702, "{spec:?} EIP-7702 flag");
             assert_eq!(cfg.enable_eip7623, expected_eip7623, "{spec:?} EIP-7623 flag");
@@ -357,19 +359,14 @@ mod tests {
                 if expected_eip7623 { 21_000 } else { 0 },
                 "{spec:?} EIP-7623 floor base gas override"
             );
-
-            let evm = Context::scroll()
-                .with_cfg(CfgEnv::new_with_spec(spec))
-                .build_scroll(Some(Address::ZERO));
-            let expected_tx_gas_limit_cap =
-                (spec >= ScrollSpecId::TSUKI).then_some(eip7825::TX_GAS_LIMIT_CAP);
             assert_eq!(
-                evm.0.ctx.cfg.tx_gas_limit_cap, expected_tx_gas_limit_cap,
+                cfg.tx_gas_limit_cap,
+                if expected_eip7825 { Some(eip7825::TX_GAS_LIMIT_CAP) } else { None },
                 "{spec:?} EIP-7825 cap override"
             );
             assert_eq!(
-                evm.0.ctx.cfg.tx_gas_limit_cap(),
-                expected_tx_gas_limit_cap.unwrap_or(u64::MAX),
+                cfg.tx_gas_limit_cap(),
+                if expected_eip7825 { eip7825::TX_GAS_LIMIT_CAP } else { u64::MAX },
                 "{spec:?} EIP-7825 effective cap"
             );
 
