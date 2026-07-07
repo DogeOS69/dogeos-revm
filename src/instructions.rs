@@ -5,7 +5,8 @@ use revm::{
     context::Cfg,
     handler::instructions::InstructionProvider,
     interpreter::{
-        _count, as_u64_saturated, as_usize_or_fail, gas, instruction_table,
+        _count, as_u64_saturated, as_usize_or_fail, gas,
+        instructions::instruction_table_gas_changes_spec,
         interpreter_types::{InputsTr, MemoryTr, RuntimeFlag, StackTr},
         popn, popn_top, push, require_non_staticcall, resize_memory, Host, Instruction,
         InstructionContext, InstructionResult, InstructionTable, InterpreterTypes,
@@ -51,7 +52,11 @@ where
     HOST: ScrollContextTr,
 {
     pub fn new_mainnet() -> Self {
-        Self::new(make_scroll_instruction_table::<WIRE, HOST>())
+        Self::new_mainnet_with_spec(ScrollSpecId::default())
+    }
+
+    pub fn new_mainnet_with_spec(spec: ScrollSpecId) -> Self {
+        Self::new(make_scroll_instruction_table::<WIRE, HOST>(spec))
     }
 
     pub fn new(base_table: InstructionTable<WIRE, HOST>) -> Self {
@@ -71,8 +76,9 @@ where
 /// - `DIFFICULTY`
 /// - `CLZ`
 pub fn make_scroll_instruction_table<WIRE: InterpreterTypes, HOST: ScrollContextTr>(
+    spec: ScrollSpecId,
 ) -> InstructionTable<WIRE, HOST> {
-    let mut table = instruction_table::<WIRE, HOST>();
+    let mut table = instruction_table_gas_changes_spec::<WIRE, HOST>(spec.into());
 
     // override the instructions
     // static gas values taken from <https://github.com/bluealloy/revm/blob/v86/crates/interpreter/src/instructions.rs#L84>
@@ -283,17 +289,29 @@ mod tests {
     use crate::{
         builder::{DefaultScrollContext, ScrollContext},
         instructions::HISTORY_STORAGE_ADDRESS,
+        ScrollSpecId,
         ScrollSpecId::*,
     };
 
     use revm::{
         bytecode::{opcode::*, Bytecode},
         database::{EmptyDB, InMemoryDB},
-        interpreter::{push, InstructionContext, Interpreter},
-        primitives::{Bytes, U256},
+        interpreter::{
+            instructions::instruction_table_gas_changes_spec, interpreter::EthInterpreter, push,
+            InstructionContext, InstructionTable, Interpreter,
+        },
+        primitives::{hardfork::SpecId, Bytes, U256},
         DatabaseRef,
     };
     use rstest::rstest;
+    use std::vec::Vec;
+
+    type TestContext = ScrollContext<InMemoryDB>;
+    type TestInstructionTable = InstructionTable<EthInterpreter, TestContext>;
+
+    fn test_instruction_table(spec: ScrollSpecId) -> TestInstructionTable {
+        make_scroll_instruction_table::<EthInterpreter, TestContext>(spec)
+    }
 
     #[test]
     fn test_blockhash_before_feynman() {
@@ -305,7 +323,7 @@ mod tests {
         context.modify_cfg(|cfg| cfg.chain_id = chain_id);
         context.modify_cfg(|cfg| cfg.spec = spec);
 
-        let instructions = make_scroll_instruction_table();
+        let instructions = make_scroll_instruction_table(spec);
 
         let bytecode = Bytecode::new_legacy(Bytes::from(&[BLOCKHASH, STOP]));
         let mut interpreter = Interpreter::default().with_bytecode(bytecode);
@@ -339,7 +357,7 @@ mod tests {
             .expect("insert account should succeed")
         });
 
-        let instructions = make_scroll_instruction_table();
+        let instructions = make_scroll_instruction_table(spec);
 
         let bytecode = Bytecode::new_legacy(Bytes::from(&[BLOCKHASH, STOP]));
         let mut interpreter = Interpreter::default().with_bytecode(bytecode);
@@ -368,7 +386,7 @@ mod tests {
         context.modify_cfg(|cfg| cfg.chain_id = chain_id);
         context.modify_cfg(|cfg| cfg.spec = spec);
 
-        let instructions = make_scroll_instruction_table();
+        let instructions = make_scroll_instruction_table(spec);
 
         let bytecode = Bytecode::new_legacy(Bytes::from([opcode, STOP].to_vec()));
         let mut interpreter = Interpreter::default().with_bytecode(bytecode);
@@ -379,6 +397,46 @@ mod tests {
 
         let actual_gas_used = interpreter.gas.used();
         assert_eq!(actual_gas_used, expected_gas_used);
+    }
+
+    #[rstest]
+    #[case(SHANGHAI)]
+    #[case(BERNOULLI)]
+    #[case(CURIE)]
+    #[case(DARWIN)]
+    #[case(EUCLID)]
+    #[case(FEYNMAN)]
+    #[case(GALILEO)]
+    #[case(TSUKI)]
+    fn test_scroll_static_gas_overrides_are_documented(#[case] spec: ScrollSpecId) {
+        let scroll_table = test_instruction_table(spec);
+        let eth_table =
+            instruction_table_gas_changes_spec::<EthInterpreter, TestContext>(SpecId::from(spec));
+
+        let mut diffs = Vec::new();
+        for opcode in 0u8..=u8::MAX {
+            let expected = eth_table[opcode as usize].static_gas();
+            let actual = scroll_table[opcode as usize].static_gas();
+            if actual != expected {
+                diffs.push((opcode, expected, actual));
+            }
+        }
+
+        // Scroll disables SELFDESTRUCT execution and intentionally removes its static gas charge.
+        assert_eq!(diffs.as_slice(), &[(SELFDESTRUCT, 5000, 0)]);
+    }
+
+    #[rstest]
+    #[case(EUCLID)]
+    #[case(FEYNMAN)]
+    #[case(GALILEO)]
+    #[case(TSUKI)]
+    fn test_call_family_uses_berlin_warm_static_gas(#[case] spec: ScrollSpecId) {
+        let table = test_instruction_table(spec);
+
+        for opcode in [CALL, CALLCODE, DELEGATECALL, STATICCALL] {
+            assert_eq!(table[opcode as usize].static_gas(), 100, "opcode 0x{opcode:02x}");
+        }
     }
 
     #[test]
