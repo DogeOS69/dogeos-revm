@@ -12,7 +12,6 @@ use revm::{
     interpreter::{interpreter::EthInterpreter, InterpreterResult},
 };
 use revm_inspector::{Inspector, InspectorEvmTr, JournalExt};
-use revm_primitives::Address;
 
 /// The Scroll Evm instance.
 pub struct ScrollEvm<
@@ -26,13 +25,13 @@ pub struct ScrollEvm<
 impl<CTX: ScrollContextTr, INSP>
     ScrollEvm<CTX, INSP, ScrollInstructions<EthInterpreter, CTX>, ScrollPrecompileProvider>
 {
-    pub fn new(ctx: CTX, inspector: INSP, allow_transfer_caller: Option<Address>) -> Self {
+    pub fn new(ctx: CTX, inspector: INSP) -> Self {
         let spec = ctx.cfg().spec();
         Self(Evm {
             ctx,
             inspector,
             instruction: ScrollInstructions::new_mainnet_with_spec(spec),
-            precompiles: ScrollPrecompileProvider::new_with_spec(spec, allow_transfer_caller),
+            precompiles: ScrollPrecompileProvider::new_with_spec(spec),
             frame_stack: FrameStack::new(),
         })
     }

@@ -2,11 +2,15 @@ use alloy_evm::precompiles::{DynPrecompile, PrecompileInput};
 use revm::precompile::{
     u64_to_address, PrecompileError, PrecompileId, PrecompileOutput, PrecompileResult,
 };
-use revm_primitives::{Address, U256};
-use std::{borrow::Cow, format};
+use revm_primitives::{address, Address, U256};
+use std::{borrow::Cow, format, sync::LazyLock};
 
 /// The Transfer precompile address.
 pub const ADDRESS: Address = u64_to_address(0xff - 2);
+
+/// The native DOGE token address (only allowed caller for the transfer precompile).
+pub const NATIVE_DOGE_TOKEN_ADDRESS: Address =
+    address!("0x530000000000000000000000000000000000d09e");
 
 /// The Transfer precompile id.
 pub const ID: PrecompileId = PrecompileId::Custom(Cow::Borrowed("TRANSFER"));
@@ -16,11 +20,10 @@ pub const GAS_COST: u64 = 9000;
 
 const CALL_DATA_LENGTH: usize = 32 + 32 + 32; // 3 parameters, each 32 bytes
 
-pub fn tsuki(allow_transfer_caller: Address) -> DynPrecompile {
-    DynPrecompile::new_stateful(ID, move |input| run(input, allow_transfer_caller))
-}
+pub static TRANSFER_PRECOMPILE: LazyLock<DynPrecompile> =
+    LazyLock::new(|| DynPrecompile::new_stateful(ID, run));
 
-fn run(mut input: PrecompileInput<'_>, allow_transfer_caller: Address) -> PrecompileResult {
+fn run(mut input: PrecompileInput<'_>) -> PrecompileResult {
     // 1. can't transfer during static call
     if input.is_static {
         return Err(PrecompileError::other_static(
@@ -34,7 +37,7 @@ fn run(mut input: PrecompileInput<'_>, allow_transfer_caller: Address) -> Precom
             "transfer precompile must be called directly, not via delegatecall or callcode",
         ));
     }
-    if *input.caller() != allow_transfer_caller {
+    if *input.caller() != NATIVE_DOGE_TOKEN_ADDRESS {
         return Err(PrecompileError::other(
             "transfer precompile can only be called by the allowed caller",
         ));
