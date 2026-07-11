@@ -125,7 +125,7 @@ pub(crate) fn tsuki() -> PrecompilesMap {
     });
 
     PrecompilesMap::from_static(static_precompiles)
-        .with_extended_precompiles([(transfer::ADDRESS, transfer::TRANSFER_PRECOMPILE.clone())])
+        .with_extended_precompiles([(transfer::ADDRESS, transfer::precompile().clone())])
 }
 
 impl<BlockEnv, TxEnv, CfgEnv, DB, Chain>

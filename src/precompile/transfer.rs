@@ -1,9 +1,10 @@
 use alloy_evm::precompiles::{DynPrecompile, PrecompileInput};
+use once_cell::race::OnceBox;
 use revm::precompile::{
     u64_to_address, PrecompileError, PrecompileId, PrecompileOutput, PrecompileResult,
 };
 use revm_primitives::{address, Address, U256};
-use std::{borrow::Cow, format, sync::LazyLock};
+use std::{borrow::Cow, boxed::Box, format};
 
 /// The Transfer precompile address.
 pub const ADDRESS: Address = u64_to_address(0xff - 2);
@@ -20,8 +21,11 @@ pub const GAS_COST: u64 = 9000;
 
 const CALL_DATA_LENGTH: usize = 32 + 32 + 32; // 3 parameters, each 32 bytes
 
-pub static TRANSFER_PRECOMPILE: LazyLock<DynPrecompile> =
-    LazyLock::new(|| DynPrecompile::new_stateful(ID, run));
+/// Returns the lazily initialized native transfer precompile.
+pub fn precompile() -> &'static DynPrecompile {
+    static INSTANCE: OnceBox<DynPrecompile> = OnceBox::new();
+    INSTANCE.get_or_init(|| Box::new(DynPrecompile::new_stateful(ID, run)))
+}
 
 fn run(mut input: PrecompileInput<'_>) -> PrecompileResult {
     // 1. can't transfer during static call
