@@ -71,6 +71,12 @@ impl DefaultScrollContext for ScrollContext<EmptyDB> {
 
 pub trait ScrollCfgExt {
     fn new_scroll(spec: ScrollSpecId) -> Self;
+    /// Sets the Scroll spec and updates the gas parameters accordingly.
+    ///
+    /// # Note
+    ///
+    /// This won't reset the `tx_gas_limit_cap` if it was already set, e.g. downgrading from a spec
+    /// that has the cap to one that doesn't.
     fn set_scroll_spec(&mut self, spec: ScrollSpecId);
 }
 
