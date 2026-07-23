@@ -1,5 +1,5 @@
 use crate::{
-    builder::{DefaultScrollContext, ScrollContext},
+    builder::{DefaultScrollContext, ScrollCfgExt, ScrollContext},
     precompile::{
         self,
         transfer::{
@@ -111,7 +111,7 @@ fn context(from_balance: U256, to_balance: U256) -> ScrollContext<InMemoryDB> {
 fn context_with_balances(balances: &[(Address, U256)]) -> ScrollContext<InMemoryDB> {
     Context::scroll()
         .with_db(InMemoryDB::default())
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::TSUKI)
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::TSUKI))
         .modify_db_chained(|db| {
             for (address, balance) in balances {
                 db.cache.accounts.insert(
@@ -126,7 +126,9 @@ fn context_with_balances(balances: &[(Address, U256)]) -> ScrollContext<InMemory
 }
 
 fn failing_context() -> ScrollContext<FailingDb> {
-    Context::scroll().with_db(FailingDb).modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::TSUKI)
+    Context::scroll()
+        .with_db(FailingDb)
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::TSUKI))
 }
 
 fn call_transfer_precompile<DB>(

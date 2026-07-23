@@ -1,5 +1,5 @@
 use crate::{
-    builder::ScrollBuilder,
+    builder::{ScrollBuilder, ScrollCfgExt},
     handler::ScrollHandler,
     l1block::*,
     test_utils::{context, ScrollContextTestUtils, BENEFICIARY, CALLER},
@@ -16,9 +16,9 @@ use std::{boxed::Box, vec};
 
 #[test]
 fn test_should_deduct_correct_fees_bernoulli() -> Result<(), Box<dyn core::error::Error>> {
-    let ctx = context()
-        .with_funds(U256::from(30_000))
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::BERNOULLI);
+    let ctx = context().with_funds(U256::from(30_000)).modify_cfg_chained(|cfg| {
+        cfg.set_scroll_spec(ScrollSpecId::BERNOULLI);
+    });
     let mut evm = ctx.clone().build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
@@ -37,7 +37,7 @@ fn test_should_deduct_correct_fees_bernoulli() -> Result<(), Box<dyn core::error
 fn test_should_deduct_correct_fees_curie() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context()
         .with_funds(U256::from(70_000))
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::CURIE);
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::CURIE));
     let mut evm = ctx.clone().build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
@@ -56,7 +56,7 @@ fn test_should_deduct_correct_fees_curie() -> Result<(), Box<dyn core::error::Er
 fn test_no_rollup_fee_for_system_tx() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context()
         .with_funds(U256::from(70_000))
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::CURIE)
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::CURIE))
         .modify_tx_chained(|tx| {
             tx.base.caller = SYSTEM_ADDRESS;
             tx.base.gas_price = 0
@@ -79,7 +79,7 @@ fn test_no_rollup_fee_for_system_tx() -> Result<(), Box<dyn core::error::Error>>
 #[test]
 fn test_reward_beneficiary_system_tx() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context()
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::CURIE)
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::CURIE))
         .modify_tx_chained(|tx| tx.base.caller = SYSTEM_ADDRESS);
 
     let mut evm = ctx.build_scroll();
@@ -117,7 +117,7 @@ fn test_should_deduct_correct_fees_feynman() -> Result<(), Box<dyn core::error::
 
     let ctx = context()
         .with_funds(initial_funds)
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::FEYNMAN)
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::FEYNMAN))
         .modify_tx_chained(|tx| tx.compression_ratio = Some(compression_ratio))
         .with_gas_oracle_config(gas_oracle)
         .with_tx_payload(tx_payload.into());

@@ -293,6 +293,7 @@ mod tests {
         ScrollSpecId::*,
     };
 
+    use crate::builder::ScrollCfgExt;
     use revm::{
         bytecode::{opcode::*, Bytecode},
         database::{EmptyDB, InMemoryDB},
@@ -321,7 +322,7 @@ mod tests {
         let mut context = ScrollContext::scroll().with_db(InMemoryDB::new(db));
         context.modify_block(|block| block.number = current_block);
         context.modify_cfg(|cfg| cfg.chain_id = chain_id);
-        context.modify_cfg(|cfg| cfg.spec = spec);
+        context.modify_cfg(|cfg| cfg.set_scroll_spec(spec));
 
         let instructions = make_scroll_instruction_table(spec);
 
@@ -343,7 +344,7 @@ mod tests {
         let mut context = ScrollContext::scroll().with_db(InMemoryDB::new(db));
         context.modify_block(|block| block.number = current_block);
         context.modify_cfg(|cfg| cfg.chain_id = chain_id);
-        context.modify_cfg(|cfg| cfg.spec = spec);
+        context.modify_cfg(|cfg| cfg.set_scroll_spec(spec));
 
         // updating the history storage system contract is not part of revm,
         // in this test we simply write the block hash to the contract storage.
@@ -384,7 +385,7 @@ mod tests {
         let mut context = ScrollContext::scroll().with_db(InMemoryDB::new(db));
         context.modify_block(|block| block.number = current_block);
         context.modify_cfg(|cfg| cfg.chain_id = chain_id);
-        context.modify_cfg(|cfg| cfg.spec = spec);
+        context.modify_cfg(|cfg| cfg.set_scroll_spec(spec));
 
         let instructions = make_scroll_instruction_table(spec);
 
@@ -446,7 +447,7 @@ mod tests {
         let spec = GALILEO;
         let db = EmptyDB::new();
         let mut scroll_context = ScrollContext::scroll().with_db(InMemoryDB::new(db));
-        scroll_context.modify_cfg(|cfg| cfg.spec = spec);
+        scroll_context.modify_cfg(|cfg| cfg.set_scroll_spec(spec));
 
         let mut interpreter = Interpreter::default();
 

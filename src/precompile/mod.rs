@@ -176,9 +176,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        builder::{
-            DefaultScrollContext, EuclidEipActivations, FeynmanEipActivations, TsukiEipActivations,
-        },
+        builder::{DefaultScrollContext, ScrollCfgExt},
         precompile::bn254::pair,
     };
     use alloy_evm::{
@@ -329,19 +327,12 @@ mod tests {
             ScrollSpecId::GALILEO,
             ScrollSpecId::TSUKI,
         ] {
-            let cfg = Context::scroll()
-                .with_cfg(CfgEnv::new_with_spec(spec))
-                .maybe_with_eip_7702()
-                .maybe_with_eip_7623()
-                .maybe_with_eip_7825()
-                .cfg;
+            let cfg = CfgEnv::new_scroll(spec);
 
             let expected_eip7702 = spec >= ScrollSpecId::EUCLID;
             let expected_eip7623 = spec >= ScrollSpecId::FEYNMAN;
             let expected_eip7825 = spec >= ScrollSpecId::TSUKI;
 
-            assert_eq!(cfg.enable_eip7702, expected_eip7702, "{spec:?} EIP-7702 flag");
-            assert_eq!(cfg.enable_eip7623, expected_eip7623, "{spec:?} EIP-7623 flag");
             assert_eq!(
                 cfg.gas_params.tx_eip7702_per_empty_account_cost(),
                 if expected_eip7702 { revm_primitives::eip7702::PER_EMPTY_ACCOUNT_COST } else { 0 },

@@ -4,10 +4,11 @@ use crate::{
     l1block::L1BlockInfo,
     test_utils::{context, BENEFICIARY, CALLER},
     transaction::L1_MESSAGE_TYPE,
+    ScrollSpecId,
 };
 use std::boxed::Box;
 
-use crate::test_utils::MIN_TRANSACTION_COST;
+use crate::{builder::ScrollCfgExt, test_utils::MIN_TRANSACTION_COST};
 use revm::{
     bytecode::LegacyRawBytecode,
     context::{
@@ -45,7 +46,7 @@ fn test_l1_message_load_accounts() -> Result<(), Box<dyn core::error::Error>> {
     handler.load_accounts(&mut evm)?;
 
     // l1 block info should not be loaded for l1 messages.
-    let l1_block_info = evm.ctx().chain.clone();
+    let l1_block_info = evm.ctx().chain.l1_block_info.clone();
     assert_eq!(l1_block_info, L1BlockInfo::default());
 
     Ok(())
@@ -218,13 +219,7 @@ fn test_l1_message_eip_3607() -> Result<(), Box<dyn core::error::Error>> {
 fn test_l1_message_should_not_have_floor_gas_as_gas_used() -> Result<(), Box<dyn core::error::Error>>
 {
     let ctx = context()
-        .modify_cfg_chained(|cfg| {
-            cfg.enable_eip7623 = true;
-            cfg.gas_params.override_gas([
-                (GasId::tx_floor_cost_per_token(), TOTAL_COST_FLOOR_PER_TOKEN),
-                (GasId::tx_floor_cost_base_gas(), 21000),
-            ]);
-        })
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::EUCLID))
         .modify_tx_chained(|tx| {
             tx.base.data =
                 bytes!("0x000000000123456789abcdef00000000123456789abcdef00000000123456789abcdef");

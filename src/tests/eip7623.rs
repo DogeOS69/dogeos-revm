@@ -1,5 +1,5 @@
 use crate::{
-    builder::{FeynmanEipActivations, ScrollBuilder},
+    builder::{ScrollBuilder, ScrollCfgExt},
     handler::ScrollHandler,
     test_utils::context,
     ScrollSpecId,
@@ -17,9 +17,8 @@ fn test_should_not_apply_eip7623_calldata_gas_for_euclid() {
 
     // initiate handler.
     let ctx = context()
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::EUCLID)
-        .modify_tx_chained(|tx| tx.base.gas_limit = GAS_LIMIT)
-        .maybe_with_eip_7623();
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::EUCLID))
+        .modify_tx_chained(|tx| tx.base.gas_limit = GAS_LIMIT);
     let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
@@ -34,12 +33,11 @@ fn test_should_apply_eip7623_calldata_gas_for_feynman() {
 
     // initiate handler.
     let ctx = context()
-        .modify_cfg_chained(|cfg| cfg.spec = ScrollSpecId::FEYNMAN)
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::FEYNMAN))
         .modify_tx_chained(|tx| {
             tx.base.gas_limit = GAS_LIMIT;
             tx.base.data = bytes!("0xdead");
-        })
-        .maybe_with_eip_7623();
+        });
     let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 

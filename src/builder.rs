@@ -1,11 +1,12 @@
 use crate::{
-    evm::ScrollEvm, instructions::ScrollInstructions, l1block::L1BlockInfo,
+    chain::ScrollChainContext, evm::ScrollEvm, instructions::ScrollInstructions,
     transaction::ScrollTxTr, ScrollSpecId, ScrollTransaction,
 };
 
+use crate::gas::ScrollGasParams;
 use revm::{
     context::{BlockEnv, Cfg, CfgEnv, JournalTr, TxEnv},
-    context_interface::Block,
+    context_interface::{cfg::GasParams, Block},
     database::EmptyDB,
     interpreter::interpreter::EthInterpreter,
     primitives::eip7825,
@@ -27,7 +28,7 @@ pub trait ScrollBuilder: Sized {
 }
 
 impl<BLOCK, TX, CFG, DB, JOURNAL> ScrollBuilder
-    for Context<BLOCK, TX, CFG, DB, JOURNAL, L1BlockInfo>
+    for Context<BLOCK, TX, CFG, DB, JOURNAL, ScrollChainContext>
 where
     BLOCK: Block,
     TX: ScrollTxTr,
@@ -59,86 +60,42 @@ pub trait DefaultScrollContext {
 impl DefaultScrollContext for ScrollContext<EmptyDB> {
     fn scroll() -> ScrollContext<EmptyDB> {
         let spec = ScrollSpecId::default();
-        let mut cfg = CfgEnv::new_with_spec(spec);
-        if spec >= ScrollSpecId::EUCLID {
-            cfg = cfg.enable_eip_7702();
-        }
-        if spec >= ScrollSpecId::FEYNMAN {
-            cfg = cfg.enable_eip_7623();
-        }
+        let cfg = CfgEnv::new_scroll(spec);
 
         Context::mainnet()
             .with_tx(ScrollTransaction::default())
             .with_cfg(cfg)
-            .with_chain(L1BlockInfo::default())
+            .with_chain(ScrollChainContext::mainnet())
     }
 }
 
-/// Activates specific EIP's for Euclid.
-pub trait EuclidEipActivations {
-    /// Activates EIP-7702 if the spec is at least at Euclid.
-    fn maybe_with_eip_7702(self) -> Self;
+pub trait ScrollCfgExt {
+    fn new_scroll(spec: ScrollSpecId) -> Self;
+    fn set_scroll_spec(&mut self, spec: ScrollSpecId);
 }
 
-/// Activates specific EIP's for Feynman.
-pub trait FeynmanEipActivations: EuclidEipActivations {
-    /// Activates EIP-7623 if the spec is at least at Feynman.
-    fn maybe_with_eip_7623(self) -> Self;
-}
-
-/// Activates specific EIP's for Tsuki.
-pub trait TsukiEipActivations: FeynmanEipActivations {
-    /// Activates EIP-7825 if the spec is at least at Tsuki.
-    fn maybe_with_eip_7825(self) -> Self;
-}
-
-impl EuclidEipActivations for CfgEnv<ScrollSpecId> {
-    fn maybe_with_eip_7702(mut self) -> Self {
-        if self.spec.is_enabled_in(ScrollSpecId::EUCLID) {
-            self = self.enable_eip_7702();
-        }
-        self
+impl ScrollCfgExt for CfgEnv<ScrollSpecId> {
+    fn new_scroll(spec: ScrollSpecId) -> Self {
+        let mut cfg = CfgEnv::new_with_spec(spec);
+        cfg.set_scroll_spec(spec);
+        cfg
     }
-}
 
-impl<DB: Database> EuclidEipActivations for ScrollContext<DB> {
-    fn maybe_with_eip_7702(mut self) -> Self {
-        self.cfg = self.cfg.maybe_with_eip_7702();
-        self
-    }
-}
+    fn set_scroll_spec(&mut self, spec: ScrollSpecId) {
+        self.spec = spec;
+        self.set_gas_params(GasParams::new_scroll_spec(spec));
 
-impl FeynmanEipActivations for CfgEnv<ScrollSpecId> {
-    fn maybe_with_eip_7623(mut self) -> Self {
-        if self.spec.is_enabled_in(ScrollSpecId::FEYNMAN) {
-            self = self.enable_eip_7623();
-        }
-        self
-    }
-}
-
-impl<DB: Database> FeynmanEipActivations for ScrollContext<DB> {
-    fn maybe_with_eip_7623(mut self) -> Self {
-        self.cfg = self.cfg.maybe_with_eip_7623();
-        self
-    }
-}
-
-impl TsukiEipActivations for CfgEnv<ScrollSpecId> {
-    fn maybe_with_eip_7825(mut self) -> Self {
-        if self.spec.is_enabled_in(ScrollSpecId::TSUKI) && self.tx_gas_limit_cap.is_none() {
+        if spec.is_enabled_in(ScrollSpecId::TSUKI) && self.tx_gas_limit_cap.is_none() {
             self.tx_gas_limit_cap = Some(eip7825::TX_GAS_LIMIT_CAP);
         }
-        self
     }
 }
 
-impl<DB: Database> TsukiEipActivations for ScrollContext<DB> {
-    fn maybe_with_eip_7825(mut self) -> Self {
-        self.cfg = self.cfg.maybe_with_eip_7825();
-        self
-    }
-}
-
-pub type ScrollContext<DB> =
-    Context<BlockEnv, ScrollTransaction<TxEnv>, CfgEnv<ScrollSpecId>, DB, Journal<DB>, L1BlockInfo>;
+pub type ScrollContext<DB> = Context<
+    BlockEnv,
+    ScrollTransaction<TxEnv>,
+    CfgEnv<ScrollSpecId>,
+    DB,
+    Journal<DB>,
+    ScrollChainContext,
+>;

@@ -1,5 +1,5 @@
 use crate::{
-    handler::ScrollHandler, instructions::ScrollInstructions, l1block::L1BlockInfo,
+    chain::ScrollChainContext, handler::ScrollHandler, instructions::ScrollInstructions,
     transaction::ScrollTxTr, ScrollEvm, ScrollSpecId,
 };
 
@@ -24,7 +24,7 @@ pub trait ScrollContextTr:
     Journal: JournalTr<State = EvmState>,
     Tx: ScrollTxTr,
     Cfg: Cfg<Spec = ScrollSpecId>,
-    Chain = L1BlockInfo,
+    Chain = ScrollChainContext,
 >
 {
 }
@@ -34,7 +34,7 @@ impl<T> ScrollContextTr for T where
         Journal: JournalTr<State = EvmState>,
         Tx: ScrollTxTr,
         Cfg: Cfg<Spec = ScrollSpecId>,
-        Chain = L1BlockInfo,
+        Chain = ScrollChainContext,
     >
 {
 }
