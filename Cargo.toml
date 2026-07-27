@@ -20,7 +20,14 @@ serde = { version = "1.0", features = ["derive"], optional = true, default-featu
 
 [features]
 default = ["std", "c-kzg", "secp256k1", "portable", "blst"]
-std = ["serde?/std", "revm/std", "revm-primitives/std", "revm-inspector/std"]
+std = [
+    "alloy-evm/std",
+    "once_cell/std",
+    "serde?/std",
+    "revm/std",
+    "revm-primitives/std",
+    "revm-inspector/std",
+]
 hashbrown = ["revm/hashbrown", "revm-primitives/hashbrown"]
 serde = ["dep:serde", "revm/serde", "revm-primitives/serde", "revm-inspector/serde"]
 portable = ["revm/portable"]
