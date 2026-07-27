@@ -219,7 +219,7 @@ fn test_l1_message_eip_3607() -> Result<(), Box<dyn core::error::Error>> {
 fn test_l1_message_should_not_have_floor_gas_as_gas_used() -> Result<(), Box<dyn core::error::Error>>
 {
     let ctx = context()
-        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::EUCLID))
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::FEYNMAN))
         .modify_tx_chained(|tx| {
             tx.base.data =
                 bytes!("0x000000000123456789abcdef00000000123456789abcdef00000000123456789abcdef");
@@ -230,9 +230,15 @@ fn test_l1_message_should_not_have_floor_gas_as_gas_used() -> Result<(), Box<dyn
         });
     let tx = ctx.tx.clone();
     let mut evm = ctx.build_scroll();
+    let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+    let initial_gas = handler.validate_initial_tx_gas(&mut evm)?;
+
+    // Feynman activates EIP-7623, but L1 messages must not charge the resulting floor gas.
+    assert_eq!(initial_gas.floor_gas, 22_070);
+
     let res = evm.transact(tx.clone())?;
 
-    // floor gas is TOTAL_COST_FLOOR_PER_TOKEN * tokens_in_calldata + 21_000 = 22070;
+    // Intrinsic gas excludes EIP-7623's floor gas for an L1 message.
     let mut gas_params = GasParams::new_spec(SpecId::SHANGHAI);
     gas_params.override_gas([
         (GasId::tx_eip7702_per_empty_account_cost(), eip7702::PER_EMPTY_ACCOUNT_COST),

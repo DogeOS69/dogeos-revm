@@ -197,8 +197,8 @@ where
         let ctx = evm.ctx_ref();
         let tx = ctx.tx();
 
-        // Mirrors revm v103 `crates/handler/src/validation.rs::calculate_initial_tx_gas_for_tx`
-        // Note: Should be updated when upgrading revm
+        // Mirrors the access-list accounting in revm v103's
+        // `crates/handler/src/validation.rs::validate_initial_tx_gas`.
 
         let mut accounts = 0;
         let mut storages = 0;
@@ -217,8 +217,9 @@ where
                 .unwrap_or_default();
         }
 
-        // Mirrors revm v103 `crates/handler/src/validation.rs::calculate_initial_tx_gas`
-        // Note: Should be updated when upgrading revm
+        // SCROLL DIVERGENCE: use configured gas parameters instead of deriving mainnet
+        // parameters from the mapped Ethereum spec. This preserves Euclid's EIP-7702 and
+        // Feynman's EIP-7623 gas overrides while Scroll specs map to Ethereum Shanghai.
         let mut gas = ctx.cfg().gas_params().initial_tx_gas(
             tx.input(),
             tx.kind().is_create(),
@@ -227,8 +228,8 @@ where
             tx.authorization_list_len() as u64,
         );
 
-        // Mirrors revm v103 `crates/handler/src/validation.rs::validate_initial_tx_gas`
-        // Note: Should be updated when upgrading revm
+        // Mirrors revm v103 `crates/handler/src/validation.rs::validate_initial_tx_gas`,
+        // with Feynman's EIP-7623 activation boundary.
 
         if ctx.cfg().is_eip7623_disabled() || !ctx.cfg().spec().is_enabled_in(ScrollSpecId::FEYNMAN)
         {
@@ -498,7 +499,7 @@ where
     type IT = EthInterpreter;
 }
 
-// Mirrors revm v103 `crates/handler/src/validation.rs::validate_priority_fee_tx`
+// Mirrors revm v103 `crates/handler/src/validation.rs::validate_priority_fee_for_tx`.
 #[inline]
 fn validate_priority_fee_for_tx<TX: Transaction>(
     tx: &TX,

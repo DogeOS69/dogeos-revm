@@ -80,8 +80,7 @@ pub fn make_scroll_instruction_table<WIRE: InterpreterTypes, HOST: ScrollContext
 ) -> InstructionTable<WIRE, HOST> {
     let mut table = instruction_table_gas_changes_spec::<WIRE, HOST>(spec.into());
 
-    // override the instructions
-    // static gas values taken from <https://github.com/bluealloy/revm/blob/v86/crates/interpreter/src/instructions.rs#L84>
+    // Apply Scroll's protocol-defined instruction overrides.
     table[opcode::BLOCKHASH as usize] = Instruction::new(blockhash::<WIRE, HOST>, 20);
     table[opcode::BASEFEE as usize] = Instruction::new(basefee::<WIRE, HOST>, 2);
     table[opcode::TSTORE as usize] = Instruction::new(tstore::<WIRE, HOST>, 100);

@@ -69,9 +69,14 @@ impl DefaultScrollContext for ScrollContext<EmptyDB> {
     }
 }
 
+/// Configures [`CfgEnv`] with the gas parameters and transaction limits for a Scroll hardfork.
+///
+/// Use this trait instead of assigning [`CfgEnv::spec`] directly or using the generic spec
+/// setters. Those APIs do not update Scroll's gas parameters or the Tsuki transaction gas cap.
 pub trait ScrollCfgExt {
+    /// Creates a configuration for `spec` with all corresponding Scroll settings applied.
     fn new_scroll(spec: ScrollSpecId) -> Self;
-    /// Sets the Scroll spec and updates the gas parameters accordingly.
+    /// Sets the Scroll spec and updates its gas parameters and transaction limits accordingly.
     ///
     /// # Note
     ///
