@@ -3,7 +3,7 @@
 use crate::{exec::ScrollContextTr, l1block::L1BlockInfo, transaction::ScrollTxTr, ScrollSpecId};
 use revm::{
     context::{
-        result::{HaltReason, InvalidHeader, InvalidTransaction},
+        result::{ExecutionResult, HaltReason, InvalidHeader, InvalidTransaction, ResultGas},
         transaction::AccessListItemTr,
         Block, Cfg, ContextTr, JournalTr, Transaction,
     },
@@ -60,6 +60,8 @@ impl<EVM, ERROR, FRAME> Default for ScrollHandler<EVM, ERROR, FRAME> {
 /// - `refund` - Overrides the logic for gas refund in the case the transaction is a L1 message.
 /// - `post_execution.reward_beneficiary` - Overrides the logic to reward the beneficiary with the
 ///   gas fee and skip rewarding in case the transaction is a L1 message.
+/// - `execution_result` - Zeroes the EIP-7623 floor gas on the returned [`ResultGas`] in the case
+///   the transaction is a L1 message, so the receipt-facing gas used reflects the spent gas.
 impl<EVM, ERROR, FRAME> Handler for ScrollHandler<EVM, ERROR, FRAME>
 where
     EVM: EvmTr<Context: ScrollContextTr, Frame = FRAME>,
@@ -500,6 +502,21 @@ where
         ctx.journal_mut().balance_incr(beneficiary, reward)?;
 
         Ok(())
+    }
+
+    #[inline]
+    fn execution_result(
+        &mut self,
+        evm: &mut Self::Evm,
+        result: <<Self::Evm as EvmTr>::Frame as FrameTr>::FrameResult,
+        mut result_gas: ResultGas,
+    ) -> Result<ExecutionResult<Self::HaltReason>, Self::Error> {
+        // L1 messages are exempt from EIP-7623: zero the floor gas on the returned
+        // gas object so `ExecutionResult::gas_used()` reports the spent gas.
+        if evm.ctx().tx().is_l1_msg() {
+            result_gas.set_floor_gas(0);
+        }
+        self.mainnet.execution_result(evm, result, result_gas)
     }
 }
 

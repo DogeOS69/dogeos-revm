@@ -13,15 +13,11 @@ use std::boxed::Box;
 
 use crate::{builder::ScrollCfgExt, test_utils::MIN_TRANSACTION_COST};
 use revm::{
-    bytecode::LegacyRawBytecode,
     context::{
-        result::{EVMError, ExecutionResult, HaltReason, InvalidTransaction, ResultAndState},
+        result::{EVMError, ExecutionResult::Halt, HaltReason, InvalidTransaction, ResultAndState},
         ContextTr, JournalTr, Transaction,
     },
-    context_interface::{
-        cfg::{gas::TOTAL_COST_FLOOR_PER_TOKEN, gas_params::GasId, GasParams},
-        result::ExecutionResult::Halt,
-    },
+    context_interface::cfg::{gas::TOTAL_COST_FLOOR_PER_TOKEN, gas_params::GasId, GasParams},
     handler::{EthFrame, EvmTr, FrameResult, Handler},
     interpreter::{CallOutcome, Gas, InstructionResult, InterpreterResult},
     state::Bytecode,
@@ -150,13 +146,11 @@ fn test_l1_message_should_revert_with_out_of_funds() -> Result<(), Box<dyn core:
     let ResultAndState { result, .. } = evm.transact(tx)?;
 
     // L1 message should pass pre-execution but revert with `OutOfFunds`.
-    assert_eq!(
-        result,
-        ExecutionResult::Halt {
-            gas_used: MIN_TRANSACTION_COST.to(),
-            reason: HaltReason::OutOfFunds
-        }
-    );
+    let Halt { reason, gas, .. } = result else {
+        panic!("L1 message should halt when its value exceeds the caller balance");
+    };
+    assert_eq!(reason, HaltReason::OutOfFunds);
+    assert_eq!(gas.used(), MIN_TRANSACTION_COST.to::<u64>());
 
     Ok(())
 }
@@ -205,9 +199,8 @@ fn test_l1_message_eip_3607() -> Result<(), Box<dyn core::error::Error>> {
         })
         // set the caller code to trigger EIP-3607.
         .modify_journal_chained(|journal| {
-            journal.state.entry(CALLER).or_default().info.code = Some(Bytecode::LegacyAnalyzed(
-                LegacyRawBytecode([1u8; 2].into()).into_analyzed().into(),
-            ));
+            journal.state.entry(CALLER).or_default().info.code =
+                Some(Bytecode::new_legacy([1u8; 2].into()));
         });
     let mut evm = ctx.build_scroll();
     let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
@@ -251,7 +244,18 @@ fn test_l1_message_should_not_have_floor_gas_as_gas_used() -> Result<(), Box<dyn
         .initial_tx_gas(tx.input(), tx.kind().is_create(), 0, 0, tx.authorization_list_len() as u64)
         .initial_gas;
 
-    assert_eq!(res.result, Halt { reason: HaltReason::OutOfFunds, gas_used: expected_init_gas });
+    // The public accessor feeds receipt and cumulative gas accounting downstream: it must
+    // report the intrinsic/spent result, not the EIP-7623 floor.
+    assert_eq!(expected_init_gas, 21_428);
+    assert_eq!(res.result.gas_used(), expected_init_gas);
+
+    let Halt { reason, gas, .. } = res.result else {
+        panic!("L1 message should halt when its value exceeds the caller balance");
+    };
+    assert_eq!(reason, HaltReason::OutOfFunds);
+    assert_eq!(gas.used(), expected_init_gas);
+    // The returned gas object must carry a zeroed floor for L1 messages.
+    assert_eq!(gas.floor_gas(), 0);
 
     Ok(())
 }
