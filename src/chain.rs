@@ -1,9 +1,17 @@
 use crate::l1block::L1BlockInfo;
 
 /// Chain-wide Scroll execution policy that is independent of a transaction or block.
+///
+/// This is operator/chain policy, not part of a Scroll hardfork: it is not derived from
+/// `cfg.spec` and must be configured explicitly.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ScrollChainPolicy {
-    /// Whether non-system transactions must reserve the configured L1 data-fee buffer.
+    /// Whether fee-charged transactions must reserve an L1 data-fee buffer.
+    ///
+    /// This applies only to transactions that are charged an L1 data fee (neither L1 messages
+    /// nor system transactions). When enabled, pre-execution requires the caller's balance to
+    /// cover exactly 2x the L1 data fee (1x charged + 1x buffer); only the actual 1x fee is
+    /// deducted.
     pub require_l1_data_fee_buffer: bool,
 }
 

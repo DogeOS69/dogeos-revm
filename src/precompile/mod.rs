@@ -191,7 +191,7 @@ mod tests {
         Context,
     };
     use revm_primitives::eip7825;
-    use std::vec;
+    use std::{vec, vec::Vec};
 
     fn call_dyn_precompile(
         precompile: impl Precompile,

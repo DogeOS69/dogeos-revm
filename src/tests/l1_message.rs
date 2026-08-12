@@ -2,7 +2,10 @@ use crate::{
     builder::ScrollBuilder,
     handler::ScrollHandler,
     l1block::L1BlockInfo,
-    test_utils::{context, BENEFICIARY, CALLER},
+    test_utils::{
+        context, long_calldata, BENEFICIARY, CALLER, LONG_CALLDATA_FLOOR_GAS,
+        LONG_CALLDATA_INTRINSIC_GAS,
+    },
     transaction::L1_MESSAGE_TYPE,
     ScrollSpecId,
 };
@@ -24,7 +27,7 @@ use revm::{
     state::Bytecode,
     ExecuteEvm,
 };
-use revm_primitives::{bytes, eip7702, hardfork::SpecId, U256};
+use revm_primitives::{eip7702, hardfork::SpecId, U256};
 
 #[test]
 fn test_l1_message_validate_lacking_funds() -> Result<(), Box<dyn core::error::Error>> {
@@ -221,8 +224,7 @@ fn test_l1_message_should_not_have_floor_gas_as_gas_used() -> Result<(), Box<dyn
     let ctx = context()
         .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::FEYNMAN))
         .modify_tx_chained(|tx| {
-            tx.base.data =
-                bytes!("0x000000000123456789abcdef00000000123456789abcdef00000000123456789abcdef");
+            tx.base.data = long_calldata();
             tx.base.tx_type = L1_MESSAGE_TYPE;
             tx.base.caller = CALLER;
             tx.base.gas_limit = 200000;
@@ -234,7 +236,7 @@ fn test_l1_message_should_not_have_floor_gas_as_gas_used() -> Result<(), Box<dyn
     let initial_gas = handler.validate_initial_tx_gas(&mut evm)?;
 
     // Feynman activates EIP-7623, but L1 messages must not charge the resulting floor gas.
-    assert_eq!(initial_gas.floor_gas, 22_070);
+    assert_eq!(initial_gas.floor_gas, LONG_CALLDATA_FLOOR_GAS);
 
     let res = evm.transact(tx.clone())?;
 
@@ -252,4 +254,35 @@ fn test_l1_message_should_not_have_floor_gas_as_gas_used() -> Result<(), Box<dyn
     assert_eq!(res.result, Halt { reason: HaltReason::OutOfFunds, gas_used: expected_init_gas });
 
     Ok(())
+}
+
+#[test]
+fn test_l1_message_floor_gas_above_gas_limit_fails_validation() {
+    // A gas limit between the intrinsic gas and the Feynman EIP-7623 floor gas.
+    const GAS_LIMIT: u64 = 22_000;
+    const {
+        assert!(LONG_CALLDATA_INTRINSIC_GAS <= GAS_LIMIT && GAS_LIMIT < LONG_CALLDATA_FLOOR_GAS);
+    }
+
+    let ctx = context()
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(ScrollSpecId::FEYNMAN))
+        .modify_tx_chained(|tx| {
+            tx.base.data = long_calldata();
+            tx.base.tx_type = L1_MESSAGE_TYPE;
+            tx.base.gas_limit = GAS_LIMIT;
+        });
+    let mut evm = ctx.build_scroll();
+    let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+
+    // Historical Scroll fork behavior (d3d99f3): initial validation rejects an L1 message whose
+    // gas limit is below the EIP-7623 floor, even though post-execution exempts L1 messages from
+    // the floor charge.
+    let err = handler.validate_initial_tx_gas(&mut evm).unwrap_err();
+    assert_eq!(
+        err,
+        EVMError::Transaction(InvalidTransaction::GasFloorMoreThanGasLimit {
+            gas_floor: LONG_CALLDATA_FLOOR_GAS,
+            gas_limit: GAS_LIMIT,
+        })
+    );
 }

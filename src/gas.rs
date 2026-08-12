@@ -16,7 +16,9 @@ pub trait ScrollGasParams {
             params.override_gas([
                 (GasId::tx_eip7702_per_empty_account_cost(), eip7702::PER_EMPTY_ACCOUNT_COST),
                 // When revm exposes `tx_eip7702_auth_refund` as a GasId, configure the
-                // authorization refund here and add the matching existing-authority refund test.
+                // authorization refund here and keep the existing-authority refund test
+                // (`tests::eip7702::test_euclid_existing_authority_refund_reduces_final_gas`)
+                // unchanged and green.
                 // (
                 //     GasId::tx_eip7702_auth_refund(),
                 //     eip7702::PER_EMPTY_ACCOUNT_COST - eip7702::PER_AUTH_BASE_COST,

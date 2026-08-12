@@ -6,9 +6,9 @@ concurrency:
 
 on:
   push:
-    branches: [main]
+    branches: [main, dogeos]
   pull_request:
-    branches: [main]
+    branches: [main, dogeos]
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,7 +29,7 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test  ${{ matrix.flags }}
+      - run: cargo test --locked ${{ matrix.flags }}
 
   check-no-std:
     name: check no_std
@@ -41,7 +41,7 @@ jobs:
         with:
           targets: riscv32imac-unknown-none-elf
       - run: |
-          cargo check --target riscv32imac-unknown-none-elf --no-default-features
+          cargo check --locked --target riscv32imac-unknown-none-elf --no-default-features
 
   check:
     name: check ${{ matrix.features }}
@@ -54,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check --no-default-features --features=${{ matrix.features }}
+      - run: cargo check --locked --no-default-features --features=${{ matrix.features }}
 
   clippy:
     name: clippy
@@ -63,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo clippy --workspace --all-targets --all-features
+      - run: cargo clippy --locked --workspace --all-targets --all-features
         env:
           RUSTFLAGS: -Dwarnings
 
@@ -76,7 +76,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rust-docs
-      - run: cargo doc --workspace --all-features --no-deps --document-private-items
+      - run: cargo doc --locked --workspace --all-features --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: "--cfg docsrs -D warnings"
 

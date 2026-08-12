@@ -17,6 +17,18 @@ pub const BENEFICIARY: Address = address!("0x00000000000000000000000000000000000
 pub const MIN_TRANSACTION_COST: U256 = U256::from_limbs([21_000u64, 0, 0, 0]);
 pub const L1_DATA_COST: U256 = U256::from_limbs([40_000u64, 0, 0, 0]);
 
+/// Intrinsic gas of a transaction carrying [`long_calldata`] (21,000 base + 428 calldata gas).
+pub const LONG_CALLDATA_INTRINSIC_GAS: u64 = 21_428;
+/// EIP-7623 floor gas of a transaction carrying [`long_calldata`] (21,000 base + 10 gas per
+/// calldata token, 107 tokens).
+pub const LONG_CALLDATA_FLOOR_GAS: u64 = 22_070;
+
+/// Calldata fixture whose Feynman EIP-7623 floor gas ([`LONG_CALLDATA_FLOOR_GAS`]) exceeds its
+/// intrinsic gas ([`LONG_CALLDATA_INTRINSIC_GAS`]).
+pub fn long_calldata() -> Bytes {
+    bytes!("0x000000000123456789abcdef00000000123456789abcdef00000000123456789abcdef")
+}
+
 /// Returns a test [`ScrollContext`] which contains a basic transaction, a default block beneficiary
 /// and a state with L1 gas oracle slots set.
 pub fn context() -> ScrollContext<InMemoryDB> {

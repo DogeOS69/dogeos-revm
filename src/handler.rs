@@ -42,12 +42,21 @@ impl<EVM, ERROR, FRAME> Default for ScrollHandler<EVM, ERROR, FRAME> {
 /// Configure the handler for the Scroll chain.
 ///
 /// The trait modifies the following handlers:
-/// - `pre_execution` - Adds a hook to load `L1BlockInfo` from the database such that it can be used
-///   to calculate the L1 cost of a transaction.
+/// - `validate_env` - Copies the mainnet environment/transaction validation for the mapped Ethereum
+///   spec, with Scroll-specific handling for L1 messages (EIP-7825 cap exemption) and the Euclid
+///   EIP-7702 activation boundary.
+/// - `validate_initial_tx_gas` - Computes intrinsic and floor gas from the configured Scroll gas
+///   parameters instead of deriving them from the mapped Ethereum spec, with Feynman's EIP-7623
+///   activation boundary.
+/// - `pre_execution` - Adds a hook to refresh `L1BlockInfo` from the L1 gas price oracle in the
+///   database for every fee-charged (non-L1-message, non-system) transaction such that it can be
+///   used to calculate the L1 cost of a transaction.
 /// - `validate_against_state_and_deduct_caller` - Overrides the logic to deduct the max transaction
 ///   fee, including the L1 fee, from the caller's balance.
 /// - `last_frame_result` - Overrides the logic for gas refund in the case the transaction is a L1
 ///   message.
+/// - `eip7623_check_gas_floor` - Skips the EIP-7623 floor gas charge in the case the transaction is
+///   a L1 message.
 /// - `refund` - Overrides the logic for gas refund in the case the transaction is a L1 message.
 /// - `post_execution.reward_beneficiary` - Overrides the logic to reward the beneficiary with the
 ///   gas fee and skip rewarding in case the transaction is a L1 message.
@@ -105,6 +114,8 @@ where
             }
         }
 
+        // SCROLL DIVERGENCE: L1 messages are exempt from the EIP-7825 transaction gas limit cap;
+        // their gas limit is set on L1 and remains bounded only by the block gas limit below.
         if !tx.is_l1_msg() {
             // EIP-7825: Transaction Gas Limit Cap
             let cap = context.cfg().tx_gas_limit_cap();
@@ -260,7 +271,9 @@ where
 
     #[inline]
     fn pre_execution(&self, evm: &mut Self::Evm) -> Result<u64, Self::Error> {
-        // only load the L1BlockInfo for txs that are not l1 messages.
+        // Refresh the L1BlockInfo from the L1 gas price oracle for every fee-charged transaction
+        // (neither an L1 message nor a system transaction): oracle values may change between
+        // transactions in a block.
         if !evm.ctx().tx().is_l1_msg() && !evm.ctx().tx().is_system_tx() {
             let spec = evm.ctx().cfg().spec();
             let l1_block_info = L1BlockInfo::try_fetch(evm.ctx().db_mut(), spec)?;
@@ -665,7 +678,7 @@ mod tests {
 
     #[test]
     fn test_validate_l1_cost_buffer_required() -> Result<(), Box<dyn core::error::Error>> {
-        // With buffer enabled via CfgEnv: 1x L1_cost should fail
+        // With buffer enabled via `ScrollChainContext.policy`: 1x L1_cost should fail
         let ctx = context()
             .with_funds(MIN_TRANSACTION_COST + L1_DATA_COST)
             .modify_chain_chained(|chain| chain.policy.require_l1_data_fee_buffer = true);
