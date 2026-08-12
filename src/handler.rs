@@ -162,6 +162,9 @@ where
                 )?;
             }
             TransactionType::Eip7702 => {
+                // SCROLL DIVERGENCE: EIP-7702 activates with Scroll's Euclid hardfork rather
+                // than the mapped Ethereum spec (all current Scroll specs map to Shanghai,
+                // which would reject EIP-7702 as pre-Prague).
                 // Check if EIP-7702 transaction is enabled.
                 if !context.cfg().spec().is_enabled_in(ScrollSpecId::EUCLID) {
                     return Err(InvalidTransaction::Eip7702NotSupported.into());

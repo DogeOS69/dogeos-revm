@@ -200,7 +200,7 @@ mod tests {
         input: &[u8],
         gas: u64,
     ) -> PrecompileResult {
-        let mut ctx = Context::scroll().with_cfg(CfgEnv::new_with_spec(ScrollSpecId::TSUKI));
+        let mut ctx = Context::scroll().with_cfg(CfgEnv::new_scroll(ScrollSpecId::TSUKI));
 
         precompile.call(PrecompileInput {
             data: input,
