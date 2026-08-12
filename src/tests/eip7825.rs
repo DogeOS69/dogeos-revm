@@ -1,10 +1,12 @@
 use crate::{
-    builder::ScrollBuilder, handler::ScrollHandler, test_utils::context,
-    transaction::L1_MESSAGE_TYPE, ScrollSpecId,
+    builder::{ScrollBuilder, ScrollCfgExt},
+    handler::ScrollHandler,
+    test_utils::context,
+    transaction::L1_MESSAGE_TYPE,
+    ScrollSpecId,
 };
 use std::boxed::Box;
 
-use crate::builder::TsukiEipActivations;
 use revm::{
     context::result::{EVMError, InvalidTransaction},
     handler::{EthFrame, Handler},
@@ -16,13 +18,9 @@ fn context_with_spec_and_gas_limit(
     gas_limit: u64,
 ) -> crate::builder::ScrollContext<revm::database::InMemoryDB> {
     context()
-        .modify_cfg_chained(|cfg| {
-            cfg.spec = spec;
-            cfg.tx_gas_limit_cap = None;
-        })
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(spec))
         .modify_tx_chained(|tx| tx.base.gas_limit = gas_limit)
         .modify_block_chained(|block| block.gas_limit = gas_limit)
-        .maybe_with_eip_7825()
 }
 
 #[test]
@@ -99,7 +97,7 @@ fn explicit_tx_gas_limit_cap_override_is_preserved() {
     let cap = 42;
     let ctx = context()
         .modify_cfg_chained(|cfg| {
-            cfg.spec = ScrollSpecId::TSUKI;
+            cfg.set_scroll_spec(ScrollSpecId::TSUKI);
             cfg.tx_gas_limit_cap = Some(cap);
         })
         .modify_tx_chained(|tx| tx.base.gas_limit = gas_limit)

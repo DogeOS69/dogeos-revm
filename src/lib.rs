@@ -6,10 +6,14 @@ extern crate alloc as std;
 
 pub mod builder;
 
+pub mod chain;
+
 pub use evm::ScrollEvm;
 pub mod evm;
 
 mod exec;
+
+pub mod gas;
 
 pub mod handler;
 

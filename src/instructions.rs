@@ -80,8 +80,7 @@ pub fn make_scroll_instruction_table<WIRE: InterpreterTypes, HOST: ScrollContext
 ) -> InstructionTable<WIRE, HOST> {
     let mut table = instruction_table_gas_changes_spec::<WIRE, HOST>(spec.into());
 
-    // override the instructions
-    // static gas values taken from <https://github.com/bluealloy/revm/blob/v86/crates/interpreter/src/instructions.rs#L84>
+    // Apply Scroll's protocol-defined instruction overrides.
     table[opcode::BLOCKHASH as usize] = Instruction::new(blockhash::<WIRE, HOST>, 20);
     table[opcode::BASEFEE as usize] = Instruction::new(basefee::<WIRE, HOST>, 2);
     table[opcode::TSTORE as usize] = Instruction::new(tstore::<WIRE, HOST>, 100);
@@ -293,6 +292,7 @@ mod tests {
         ScrollSpecId::*,
     };
 
+    use crate::builder::ScrollCfgExt;
     use revm::{
         bytecode::{opcode::*, Bytecode},
         database::{EmptyDB, InMemoryDB},
@@ -321,7 +321,7 @@ mod tests {
         let mut context = ScrollContext::scroll().with_db(InMemoryDB::new(db));
         context.modify_block(|block| block.number = current_block);
         context.modify_cfg(|cfg| cfg.chain_id = chain_id);
-        context.modify_cfg(|cfg| cfg.spec = spec);
+        context.modify_cfg(|cfg| cfg.set_scroll_spec(spec));
 
         let instructions = make_scroll_instruction_table(spec);
 
@@ -343,7 +343,7 @@ mod tests {
         let mut context = ScrollContext::scroll().with_db(InMemoryDB::new(db));
         context.modify_block(|block| block.number = current_block);
         context.modify_cfg(|cfg| cfg.chain_id = chain_id);
-        context.modify_cfg(|cfg| cfg.spec = spec);
+        context.modify_cfg(|cfg| cfg.set_scroll_spec(spec));
 
         // updating the history storage system contract is not part of revm,
         // in this test we simply write the block hash to the contract storage.
@@ -384,7 +384,7 @@ mod tests {
         let mut context = ScrollContext::scroll().with_db(InMemoryDB::new(db));
         context.modify_block(|block| block.number = current_block);
         context.modify_cfg(|cfg| cfg.chain_id = chain_id);
-        context.modify_cfg(|cfg| cfg.spec = spec);
+        context.modify_cfg(|cfg| cfg.set_scroll_spec(spec));
 
         let instructions = make_scroll_instruction_table(spec);
 
@@ -446,7 +446,7 @@ mod tests {
         let spec = GALILEO;
         let db = EmptyDB::new();
         let mut scroll_context = ScrollContext::scroll().with_db(InMemoryDB::new(db));
-        scroll_context.modify_cfg(|cfg| cfg.spec = spec);
+        scroll_context.modify_cfg(|cfg| cfg.set_scroll_spec(spec));
 
         let mut interpreter = Interpreter::default();
 
