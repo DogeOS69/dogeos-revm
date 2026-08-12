@@ -15,14 +15,10 @@ pub trait ScrollGasParams {
             // but Euclid activates EIP-7702's authorization-list intrinsic gas.
             params.override_gas([
                 (GasId::tx_eip7702_per_empty_account_cost(), eip7702::PER_EMPTY_ACCOUNT_COST),
-                // When revm exposes `tx_eip7702_auth_refund` as a GasId, configure the
-                // authorization refund here and keep the existing-authority refund test
-                // (`tests::eip7702::test_euclid_existing_authority_refund_reduces_final_gas`)
-                // unchanged and green.
-                // (
-                //     GasId::tx_eip7702_auth_refund(),
-                //     eip7702::PER_EMPTY_ACCOUNT_COST - eip7702::PER_AUTH_BASE_COST,
-                // ),
+                (
+                    GasId::tx_eip7702_auth_refund(),
+                    eip7702::PER_EMPTY_ACCOUNT_COST - eip7702::PER_AUTH_BASE_COST,
+                ),
             ]);
         }
 
@@ -41,3 +37,32 @@ pub trait ScrollGasParams {
 }
 
 impl ScrollGasParams for GasParams {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_eip7702_auth_refund_per_spec() {
+        // Pre-Euclid specs do not activate EIP-7702: no authorization refund.
+        let params = GasParams::new_scroll_spec(ScrollSpecId::DARWIN);
+        assert_eq!(params.tx_eip7702_auth_refund(), 0);
+
+        // Euclid and later refund the existing-authority delta while keeping the
+        // per-empty-account intrinsic authorization cost.
+        for spec in [
+            ScrollSpecId::EUCLID,
+            ScrollSpecId::FEYNMAN,
+            ScrollSpecId::GALILEO,
+            ScrollSpecId::TSUKI,
+        ] {
+            let params = GasParams::new_scroll_spec(spec);
+            assert_eq!(
+                params.tx_eip7702_auth_refund(),
+                eip7702::PER_EMPTY_ACCOUNT_COST - eip7702::PER_AUTH_BASE_COST
+            );
+            assert_eq!(params.tx_eip7702_auth_refund(), 12_500);
+            assert_eq!(params.tx_eip7702_per_empty_account_cost(), 25_000);
+        }
+    }
+}

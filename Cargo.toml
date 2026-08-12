@@ -9,7 +9,7 @@ alloy-evm = { version = "0.30.0", default-features = false }
 
 # revm
 revm = { version = "36.0.0", default-features = false }
-revm-primitives = {  version = "22.0.0", default-features = false }
+revm-primitives = { version = "22.1.0", default-features = false }
 revm-inspector = { version = "17.0.0", default-features = false }
 
 # misc

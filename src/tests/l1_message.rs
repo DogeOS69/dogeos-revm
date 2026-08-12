@@ -244,11 +244,18 @@ fn test_l1_message_should_not_have_floor_gas_as_gas_used() -> Result<(), Box<dyn
         .initial_tx_gas(tx.input(), tx.kind().is_create(), 0, 0, tx.authorization_list_len() as u64)
         .initial_gas;
 
+    // The public accessor feeds receipt and cumulative gas accounting downstream: it must
+    // report the intrinsic/spent result, not the EIP-7623 floor.
+    assert_eq!(expected_init_gas, 21_428);
+    assert_eq!(res.result.gas_used(), expected_init_gas);
+
     let Halt { reason, gas, .. } = res.result else {
         panic!("L1 message should halt when its value exceeds the caller balance");
     };
     assert_eq!(reason, HaltReason::OutOfFunds);
-    assert_eq!(gas.spent_sub_refunded(), expected_init_gas);
+    assert_eq!(gas.used(), expected_init_gas);
+    // The returned gas object must carry a zeroed floor for L1 messages.
+    assert_eq!(gas.floor_gas(), 0);
 
     Ok(())
 }
