@@ -304,16 +304,11 @@ where
         let spec = ctx_ref.cfg().spec();
         let is_eip3607_disabled = ctx_ref.cfg().is_eip3607_disabled();
 
-        // execute normal checks and transaction processing logic for non-l1-msgs
-        if !is_l1_msg {
-            // We deduct caller max balance after minting and before deducing the
-            // l1 cost, max values is already checked in pre_validate but l1 cost wasn't.
-            self.mainnet.validate_against_state_and_deduct_caller(evm)?;
-        }
-
-        // process rollup fee
-        let ctx = evm.ctx();
-        if !is_l1_msg && !is_system_tx {
+        // Validate total spending against the original balance before any deduction.
+        let tx_l1_cost = if !is_l1_msg && !is_system_tx {
+            let ctx = evm.ctx();
+            let balance = *ctx.journal_mut().load_account_mut(caller)?.balance();
+            ctx.tx().ensure_enough_balance(balance)?;
             let l1_block_info = ctx.chain().l1_block_info.clone();
             let Some(rlp_bytes) = ctx.tx().rlp_bytes() else {
                 return Err(ERROR::from_string(
@@ -321,7 +316,7 @@ where
                 ));
             };
 
-            // Deduct l1 fee from caller.
+            // Calculate the L1 fee.
             let tx_l1_cost = l1_block_info.calculate_tx_l1_cost(
                 rlp_bytes,
                 spec,
@@ -336,19 +331,34 @@ where
                 tx_l1_cost
             };
 
-            let mut caller_account = ctx.journal_mut().load_account_mut(caller)?;
+            let required_balance = ctx
+                .tx()
+                .max_balance_spending()?
+                .checked_add(l1_cost_with_optional_buffer)
+                .ok_or(InvalidTransaction::OverflowPaymentInTransaction)?;
 
-            // Ensure caller has enough balance to cover L1 cost + optional buffer
-            if l1_cost_with_optional_buffer.gt(caller_account.balance()) {
+            if required_balance > balance {
                 return Err(InvalidTransaction::LackOfFundForMaxFee {
-                    fee: l1_cost_with_optional_buffer.into(),
-                    balance: (*caller_account.balance()).into(),
+                    fee: required_balance.into(),
+                    balance: balance.into(),
                 }
                 .into());
             }
 
+            tx_l1_cost
+        } else {
+            U256::ZERO
+        };
+
+        // execute normal checks and transaction processing logic for non-l1-msgs
+        if !is_l1_msg {
+            self.mainnet.validate_against_state_and_deduct_caller(evm)?;
+        }
+
+        let ctx = evm.ctx();
+        if !is_l1_msg && !is_system_tx {
             // Deduct only actual L1 cost (buffer is NOT deducted)
-            caller_account.decr_balance(tx_l1_cost);
+            ctx.journal_mut().load_account_mut(caller)?.decr_balance(tx_l1_cost);
         }
 
         // execute l1 msg checks
