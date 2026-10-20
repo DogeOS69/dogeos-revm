@@ -308,7 +308,6 @@ where
         let tx_l1_cost = if !is_l1_msg && !is_system_tx {
             let ctx = evm.ctx();
             let balance = *ctx.journal_mut().load_account_mut(caller)?.balance();
-            ctx.tx().ensure_enough_balance(balance)?;
             let l1_block_info = ctx.chain().l1_block_info.clone();
             let Some(rlp_bytes) = ctx.tx().rlp_bytes() else {
                 return Err(ERROR::from_string(
@@ -579,12 +578,15 @@ mod tests {
     fn test_validate_lacking_funds() -> Result<(), Box<dyn core::error::Error>> {
         let ctx = context();
         let mut evm = ctx.build_scroll();
+        let spec = *evm.ctx().cfg().spec();
+        let l1_block_info = L1BlockInfo::try_fetch(evm.ctx().db_mut(), spec)?;
+        evm.ctx().chain_mut().l1_block_info = l1_block_info;
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
         let err = handler.validate_against_state_and_deduct_caller(&mut evm).unwrap_err();
         assert_eq!(
             err,
             EVMError::Transaction(InvalidTransaction::LackOfFundForMaxFee {
-                fee: Box::new(U256::from(21000)),
+                fee: Box::new(MIN_TRANSACTION_COST + L1_DATA_COST),
                 balance: Box::default()
             })
         );
