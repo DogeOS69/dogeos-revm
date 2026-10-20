@@ -323,17 +323,10 @@ where
                 ctx.tx().compressed_size(),
             );
 
-            // Optionally check balance covers 2x L1 cost (1 unit charged + 1 unit buffer)
-            let l1_cost_with_optional_buffer = if ctx.chain().policy.require_l1_data_fee_buffer {
-                tx_l1_cost.saturating_add(tx_l1_cost)
-            } else {
-                tx_l1_cost
-            };
-
             let required_balance = ctx
                 .tx()
                 .max_balance_spending()?
-                .checked_add(l1_cost_with_optional_buffer)
+                .checked_add(tx_l1_cost)
                 .ok_or(InvalidTransaction::OverflowPaymentInTransaction)?;
 
             if required_balance > balance {
@@ -356,7 +349,7 @@ where
 
         let ctx = evm.ctx();
         if !is_l1_msg && !is_system_tx {
-            // Deduct only actual L1 cost (buffer is NOT deducted)
+            // Deduct the L1 data fee after validating total spending.
             ctx.journal_mut().load_account_mut(caller)?.decr_balance(tx_l1_cost);
         }
 
@@ -704,40 +697,6 @@ mod tests {
         let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
         handler.pre_execution(&mut evm)?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_validate_l1_cost_buffer_required() -> Result<(), Box<dyn core::error::Error>> {
-        // With buffer enabled via `ScrollChainContext.policy`: 1x L1_cost should fail
-        let ctx = context()
-            .with_funds(MIN_TRANSACTION_COST + L1_DATA_COST)
-            .modify_chain_chained(|chain| chain.policy.require_l1_data_fee_buffer = true);
-        let mut evm = ctx.build_scroll();
-        let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-        assert!(matches!(
-            handler.pre_execution(&mut evm),
-            Err(EVMError::Transaction(InvalidTransaction::LackOfFundForMaxFee { .. }))
-        ));
-
-        // With buffer enabled: 2x L1_cost should pass
-        let ctx = context()
-            .with_funds(MIN_TRANSACTION_COST + L1_DATA_COST + L1_DATA_COST)
-            .modify_chain_chained(|chain| chain.policy.require_l1_data_fee_buffer = true);
-        let mut evm = ctx.build_scroll();
-        assert!(handler.pre_execution(&mut evm).is_ok());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_validate_l1_cost_no_buffer_by_default() -> Result<(), Box<dyn core::error::Error>> {
-        // Without buffer: 1x L1_cost should pass
-        let ctx = context().with_funds(MIN_TRANSACTION_COST + L1_DATA_COST);
-        let mut evm = ctx.build_scroll();
-        let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
-        assert!(handler.pre_execution(&mut evm).is_ok());
 
         Ok(())
     }

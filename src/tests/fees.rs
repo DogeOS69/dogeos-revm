@@ -2,16 +2,21 @@ use crate::{
     builder::{ScrollBuilder, ScrollCfgExt},
     handler::ScrollHandler,
     l1block::*,
-    test_utils::{context, ScrollContextTestUtils, BENEFICIARY, CALLER},
+    test_utils::{context, ScrollContextTestUtils, BENEFICIARY, CALLER, L1_DATA_COST, TO},
     transaction::SYSTEM_ADDRESS,
     ScrollSpecId,
 };
 use revm::{
-    context::{result::EVMError, ContextTr, JournalTr},
+    context::{
+        result::{EVMError, InvalidTransaction},
+        ContextTr, JournalTr,
+    },
     handler::{EthFrame, EvmTr, FrameResult, Handler},
     interpreter::{CallOutcome, Gas, InstructionResult, InterpreterResult},
+    ExecuteEvm,
 };
-use revm_primitives::U256;
+use revm_primitives::{TxKind, U256};
+use rstest::rstest;
 use std::{boxed::Box, vec};
 
 #[test]
@@ -133,6 +138,98 @@ fn test_should_deduct_correct_fees_feynman() -> Result<(), Box<dyn core::error::
     // cost is 21k + 6k (applying 2x penalty).
     let balance_diff = initial_funds.saturating_sub(caller_account.data.info.balance);
     assert_eq!(balance_diff, U256::from(27000));
+
+    Ok(())
+}
+
+#[rstest]
+#[case::call(TxKind::Call(TO), 21_000)]
+#[case::create(TxKind::Create, 53_000)]
+fn exact_upfront_balance_covers_value_gas_and_one_l1_fee(
+    #[case] kind: TxKind,
+    #[case] gas_limit: u64,
+) -> Result<(), Box<dyn core::error::Error>> {
+    let value = U256::from(100);
+    let initial_balance = U256::from(gas_limit) + value + L1_DATA_COST;
+    let ctx = context().with_funds(initial_balance).modify_tx_chained(|tx| {
+        tx.base.kind = kind;
+        tx.base.gas_limit = gas_limit;
+        tx.base.value = value;
+    });
+    let tx = ctx.tx.clone();
+    let mut evm = ctx.build_scroll();
+
+    let result = evm.transact(tx)?;
+
+    assert!(result.result.is_success());
+    let caller = &result.state[&CALLER].info;
+    assert_eq!(caller.balance, U256::ZERO);
+    assert_eq!(caller.nonce, 1);
+    let recipient = match kind {
+        TxKind::Call(address) => address,
+        TxKind::Create => CALLER.create(0),
+    };
+    assert_eq!(result.state[&recipient].info.balance, value);
+    assert_eq!(result.state[&BENEFICIARY].info.balance, U256::from(gas_limit) + L1_DATA_COST);
+
+    Ok(())
+}
+
+#[rstest]
+#[case::call(TxKind::Call(TO), 21_000)]
+#[case::create(TxKind::Create, 53_000)]
+fn insufficient_upfront_balance_is_rejected_before_deduction(
+    #[case] kind: TxKind,
+    #[case] gas_limit: u64,
+) -> Result<(), Box<dyn core::error::Error>> {
+    let value = U256::from(100);
+    let required_balance = U256::from(gas_limit) + value + L1_DATA_COST;
+    let initial_balance = required_balance - U256::ONE;
+    let ctx = context().with_funds(initial_balance).modify_tx_chained(|tx| {
+        tx.base.kind = kind;
+        tx.base.gas_limit = gas_limit;
+        tx.base.value = value;
+    });
+    let mut evm = ctx.build_scroll();
+    let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+
+    assert_eq!(
+        handler.pre_execution(&mut evm),
+        Err(EVMError::Transaction(InvalidTransaction::LackOfFundForMaxFee {
+            fee: Box::new(required_balance),
+            balance: Box::new(initial_balance),
+        }))
+    );
+    let caller = evm.ctx_mut().journal_mut().load_account(CALLER)?;
+    assert_eq!(caller.info.balance, initial_balance);
+    assert_eq!(caller.info.nonce, 0);
+
+    Ok(())
+}
+
+#[rstest]
+#[case::call(TxKind::Call(TO), 21_000)]
+#[case::create(TxKind::Create, 53_000)]
+fn upfront_l1_fee_overflow_is_rejected_before_deduction(
+    #[case] kind: TxKind,
+    #[case] gas_limit: u64,
+) -> Result<(), Box<dyn core::error::Error>> {
+    let ctx = context().with_funds(U256::MAX).modify_tx_chained(|tx| {
+        tx.base.kind = kind;
+        tx.base.gas_limit = gas_limit;
+        // Gas and value fit exactly, but adding the L1 fee overflows.
+        tx.base.value = U256::MAX - U256::from(gas_limit);
+    });
+    let mut evm = ctx.build_scroll();
+    let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+
+    assert_eq!(
+        handler.pre_execution(&mut evm),
+        Err(EVMError::Transaction(InvalidTransaction::OverflowPaymentInTransaction))
+    );
+    let caller = evm.ctx_mut().journal_mut().load_account(CALLER)?;
+    assert_eq!(caller.info.balance, U256::MAX);
+    assert_eq!(caller.info.nonce, 0);
 
     Ok(())
 }
