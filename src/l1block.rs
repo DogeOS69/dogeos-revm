@@ -356,7 +356,8 @@ mod tests {
             ..Default::default()
         };
 
-        let tx_size = 1e10 as usize; // dummy, but make sure this value is larger than the compressed size
+        // Use a dummy size larger than the compressed size.
+        let tx_size = 1e10 as usize;
         let spec = ScrollSpecId::GALILEO;
         let actual = gpo.calculate_tx_l1_cost_galileo(tx_size, spec, compressed_size);
         assert_eq!(expected, actual);
