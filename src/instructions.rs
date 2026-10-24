@@ -2,7 +2,10 @@ use crate::{exec::ScrollContextTr, ScrollSpecId};
 use core::cmp::max;
 use revm::{
     bytecode::opcode,
-    context::Cfg,
+    context::{Cfg, JournalTr},
+    context_interface::{
+        context::ContextError, host::LoadError, journaled_state::account::JournaledAccountTr,
+    },
     handler::instructions::InstructionProvider,
     interpreter::{
         _count, as_u64_saturated, as_usize_or_fail, gas,
@@ -100,7 +103,8 @@ pub fn make_scroll_instruction_table<WIRE: InterpreterTypes, HOST: ScrollContext
 ///
 /// If the requested block number is the current block number, a future block number or a block
 /// number older than `BLOCK_HASH_HISTORY` we return 0.
-/// Gas is accounted in the interpreter <https://github.com/bluealloy/revm/blob/fd52a1fb531f4627ea7e69780aab56536533269d/crates/interpreter/src/interpreter.rs#L278>
+/// The interpreter charges the base 20 gas. From Tsuki, valid lookups additionally charge
+/// SLOAD gas and warm the history slot as specified by EIP-7709.
 fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionContext<'_, H, WIRE>) {
     let host = context.host;
     let interpreter = context.interpreter;
@@ -131,17 +135,52 @@ fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionCon
         // blockhash requested for block in the history (post-Feynman)
         // blockhash is loaded from the EIP-2935 history storage system contract storage.
         _ => {
+            // index in system contract ring buffer storage is block_number % HISTORY_SERVE_WINDOW
+            let requested_block_number_u64 = as_u64_saturated!(requested_number);
+            let index = U256::from(requested_block_number_u64.wrapping_rem(HISTORY_SERVE_WINDOW));
+
+            if host.cfg().spec().is_enabled_in(ScrollSpecId::TSUKI) {
+                gas!(interpreter, host.gas_params().warm_storage_read_cost());
+
+                // SLOAD requires a loaded account, but EIP-7709 only warms the slot. Do not
+                // load code or follow delegation, and preserve the account's prior warmth.
+                let load = host.journal_mut().load_account_mut(HISTORY_STORAGE_ADDRESS).map(
+                    |mut account| {
+                        if account.is_cold {
+                            // Undo only the warming introduced by this load. Its journal entry
+                            // also restores cold, so reverting the frame remains correct.
+                            account.data.unsafe_mark_cold();
+                        }
+                    },
+                );
+                if let Err(error) = load {
+                    *host.error() = Err(ContextError::Db(error));
+                    interpreter.halt_fatal();
+                    return;
+                }
+
+                let additional_cold_cost = host.gas_params().cold_storage_additional_cost();
+                let skip_cold = interpreter.gas.remaining() < additional_cold_cost;
+                return match host.sload_skip_cold_load(HISTORY_STORAGE_ADDRESS, index, skip_cold) {
+                    Ok(value) => {
+                        if value.is_cold {
+                            gas!(interpreter, additional_cold_cost);
+                        }
+                        *number = value.data;
+                    }
+                    Err(LoadError::ColdLoadSkipped) => interpreter.halt_oog(),
+                    Err(LoadError::DBError) => interpreter.halt_fatal(),
+                };
+            }
+
+            // Preserve the pre-Tsuki account/code accesses and fixed 20 gas charge.
             // sload assumes that the account is present in the journal
             if host.load_account_delegated(HISTORY_STORAGE_ADDRESS).is_none() {
                 interpreter.halt(InstructionResult::FatalExternalError);
                 return;
             };
 
-            // index in system contract ring buffer storage is block_number % HISTORY_SERVE_WINDOW
-            let requested_block_number_u64 = as_u64_saturated!(requested_number);
-            let index = requested_block_number_u64.wrapping_rem(HISTORY_SERVE_WINDOW);
-
-            let Some(value) = host.sload(HISTORY_STORAGE_ADDRESS, U256::from(index)) else {
+            let Some(value) = host.sload(HISTORY_STORAGE_ADDRESS, index) else {
                 interpreter.halt(InstructionResult::FatalExternalError);
                 return;
             };
