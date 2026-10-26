@@ -3,9 +3,7 @@ use core::cmp::max;
 use revm::{
     bytecode::opcode,
     context::{Cfg, JournalTr},
-    context_interface::{
-        context::ContextError, host::LoadError, journaled_state::account::JournaledAccountTr,
-    },
+    context_interface::{context::StateLoad, host::LoadError},
     handler::instructions::InstructionProvider,
     interpreter::{
         _count, as_u64_saturated, as_usize_or_fail, gas,
@@ -141,53 +139,70 @@ fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionCon
 
             if host.cfg().spec().is_enabled_in(ScrollSpecId::TSUKI) {
                 gas!(interpreter, host.gas_params().warm_storage_read_cost());
-
-                // SLOAD requires a loaded account, but EIP-7709 only warms the slot. Do not
-                // load code or follow delegation, and preserve the account's prior warmth.
-                let load = host.journal_mut().load_account_mut(HISTORY_STORAGE_ADDRESS).map(
-                    |mut account| {
-                        if account.is_cold {
-                            // Undo only the warming introduced by this load. Its journal entry
-                            // also restores cold, so reverting the frame remains correct.
-                            account.data.unsafe_mark_cold();
-                        }
-                    },
-                );
-                if let Err(error) = load {
-                    *host.error() = Err(ContextError::Db(error));
-                    interpreter.halt_fatal();
-                    return;
-                }
-
                 let additional_cold_cost = host.gas_params().cold_storage_additional_cost();
                 let skip_cold = interpreter.gas.remaining() < additional_cold_cost;
-                return match host.sload_skip_cold_load(HISTORY_STORAGE_ADDRESS, index, skip_cold) {
+                match tsuki_history_sload(host, index, skip_cold) {
                     Ok(value) => {
                         if value.is_cold {
                             gas!(interpreter, additional_cold_cost);
                         }
-                        *number = value.data;
+                        value.data
                     }
-                    Err(LoadError::ColdLoadSkipped) => interpreter.halt_oog(),
-                    Err(LoadError::DBError) => interpreter.halt_fatal(),
+                    Err(LoadError::ColdLoadSkipped) => {
+                        interpreter.halt_oog();
+                        return;
+                    }
+                    Err(LoadError::DBError) => {
+                        interpreter.halt_fatal();
+                        return;
+                    }
+                }
+            } else {
+                // Preserve the pre-Tsuki account/code accesses and fixed 20 gas charge.
+                // sload assumes that the account is present in the journal
+                if host.load_account_delegated(HISTORY_STORAGE_ADDRESS).is_none() {
+                    interpreter.halt(InstructionResult::FatalExternalError);
+                    return;
                 };
+
+                let Some(value) = host.sload(HISTORY_STORAGE_ADDRESS, index) else {
+                    interpreter.halt(InstructionResult::FatalExternalError);
+                    return;
+                };
+
+                value.data
             }
-
-            // Preserve the pre-Tsuki account/code accesses and fixed 20 gas charge.
-            // sload assumes that the account is present in the journal
-            if host.load_account_delegated(HISTORY_STORAGE_ADDRESS).is_none() {
-                interpreter.halt(InstructionResult::FatalExternalError);
-                return;
-            };
-
-            let Some(value) = host.sload(HISTORY_STORAGE_ADDRESS, index) else {
-                interpreter.halt(InstructionResult::FatalExternalError);
-                return;
-            };
-
-            value.data
         }
     };
+}
+
+/// Loads EIP-7709 history storage without changing the account's warmth.
+///
+/// A warm-slot probe avoids reloading a cold account and accumulating account journal entries on
+/// every warm BLOCKHASH. Revm returns `ColdLoadSkipped` for an absent account or a cold slot;
+/// access lists and transaction IDs are handled by the same SLOAD path as ordinary storage reads.
+fn tsuki_history_sload<H: ScrollContextTr>(
+    host: &mut H,
+    index: U256,
+    skip_cold: bool,
+) -> Result<StateLoad<U256>, LoadError> {
+    match host.sload_skip_cold_load(HISTORY_STORAGE_ADDRESS, index, true) {
+        Ok(value) => return Ok(value),
+        Err(LoadError::DBError) => return Err(LoadError::DBError),
+        Err(LoadError::ColdLoadSkipped) => {}
+    }
+
+    // Prepare the account through Host, without code/delegation accesses. Rolling back this
+    // isolated load restores prior warmth and discards its journal entries while retaining the
+    // cached account. Do this before SLOAD so its slot warming belongs to the real call frame
+    // and remains revertible.
+    let checkpoint = host.journal_mut().checkpoint();
+    let loaded =
+        host.load_account_info_skip_cold_load(HISTORY_STORAGE_ADDRESS, false, false).map(|_| ());
+    host.journal_mut().checkpoint_revert(checkpoint);
+    loaded?;
+
+    host.sload_skip_cold_load(HISTORY_STORAGE_ADDRESS, index, skip_cold)
 }
 
 /// Implements the SELFDESTRUCT instruction.

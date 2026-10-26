@@ -12,6 +12,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Match dogeos-reth's execution-node build and zkvm-prover's pinned guest toolchain.
+  RUST_TOOLCHAIN: "1.93.0"
+  RUST_NIGHTLY_TOOLCHAIN: "nightly-2026-03-17"
 
 jobs:
   test:
@@ -21,7 +24,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust: ["stable", "nightly"]
+        # Execution node, SBV host, and zkVM prover, respectively.
+        rust: ["1.93.0", "1.96.1", "nightly-2026-03-17"]
         flags: ["--no-default-features", "", "--all-features"]
     steps:
       - uses: actions/checkout@v4
@@ -37,8 +41,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: riscv32imac-unknown-none-elf
       - run: |
           cargo check --locked --target riscv32imac-unknown-none-elf --no-default-features
@@ -53,7 +58,9 @@ jobs:
         features: ["", "serde", "std"]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - run: cargo check --locked --no-default-features --features=${{ matrix.features }}
 
   clippy:
@@ -62,7 +69,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
       - run: cargo clippy --locked --workspace --all-targets --all-features
         env:
           RUSTFLAGS: -Dwarnings
@@ -73,8 +83,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rust-docs
       - run: cargo doc --locked --workspace --all-features --no-deps --document-private-items
         env:
@@ -86,7 +97,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_NIGHTLY_TOOLCHAIN }}
           components: rustfmt
       - run: cargo fmt --all --check

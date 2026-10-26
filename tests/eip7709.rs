@@ -105,6 +105,100 @@ fn blockhash_preserves_account_warmth() {
 }
 
 #[test]
+fn warm_blockhash_reads_do_not_grow_the_journal() {
+    for warm_account in [false, true] {
+        let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI);
+        if warm_account {
+            ctx.load_account_delegated(HISTORY).unwrap();
+        }
+        let before = ctx.journaled_state.inner.journal.len();
+        let child = ctx.journaled_state.checkpoint();
+        read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 2120);
+        // Only the slot becomes warm; preparing the history account adds no persistent entries.
+        assert_eq!(ctx.journaled_state.inner.journal.len(), before + 1);
+        for _ in 0..1000 {
+            read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 120);
+        }
+        assert_eq!(ctx.journaled_state.inner.journal.len(), before + 1);
+        assert_eq!(ctx.journaled_state.depth(), 1);
+        ctx.journaled_state.checkpoint_revert(child);
+        assert_eq!(ctx.journaled_state.inner.journal.len(), before);
+        assert_eq!(ctx.journaled_state.depth(), 0);
+        let journal = &ctx.journaled_state.inner;
+        assert_eq!(
+            journal.state[&HISTORY].is_cold_transaction_id(journal.transaction_id),
+            !warm_account
+        );
+        assert!(
+            journal.state[&HISTORY].storage[&SLOT].is_cold_transaction_id(journal.transaction_id)
+        );
+        assert_eq!(ctx.journaled_state.database.basic_reads, 1);
+        assert_eq!(ctx.journaled_state.database.storage_reads, 1);
+    }
+}
+
+#[test]
+fn cached_history_respects_transaction_boundaries_and_new_access_lists() {
+    // 0: no access list; 1: account only; 2: account and slot.
+    for previous_list in 0..=2 {
+        for next_list in 0..=2 {
+            let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI);
+            for (tx, list_kind) in [(0, previous_list), (1, next_list)] {
+                if list_kind != 0 {
+                    let mut list = AddressMap::default();
+                    let slots = if list_kind == 2 {
+                        HashSet::from_iter([SLOT])
+                    } else {
+                        HashSet::default()
+                    };
+                    list.insert(HISTORY, slots);
+                    ctx.journaled_state.warm_access_list(list);
+                }
+                let gas = if list_kind == 2 { 120 } else { 2120 };
+                let child = ctx.journaled_state.checkpoint();
+                assert_eq!(read(&mut ctx, BLOCKHASH, U256::from(NUMBER), gas), U256::from(42));
+                read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 120);
+                if tx == 0 {
+                    ctx.journaled_state.checkpoint_commit();
+                    // End tx1 with a warm account so tx2 must handle cold-by-transaction-id too.
+                    ctx.load_account_delegated(HISTORY).unwrap();
+                    ctx.journaled_state.commit_tx();
+                    let journal = &ctx.journaled_state.inner;
+                    assert!(journal.state[&HISTORY].is_cold_transaction_id(journal.transaction_id));
+                    assert!(journal.state[&HISTORY].storage[&SLOT]
+                        .is_cold_transaction_id(journal.transaction_id));
+                } else {
+                    ctx.journaled_state.checkpoint_revert(child);
+                    read(&mut ctx, BLOCKHASH, U256::from(NUMBER), gas);
+                    read(
+                        &mut ctx,
+                        BALANCE,
+                        HISTORY.into_word().into(),
+                        if list_kind == 0 { 2600 } else { 100 },
+                    );
+                }
+            }
+            assert_eq!(ctx.journaled_state.database.basic_reads, 1);
+            assert_eq!(ctx.journaled_state.database.storage_reads, 1);
+        }
+    }
+}
+
+#[test]
+fn committed_history_writes_remain_visible_in_the_next_transaction() {
+    let mut ctx = seeded(ScrollSpecId::TSUKI);
+    ctx.load_account_delegated(HISTORY).unwrap();
+    ctx.journaled_state.sstore(HISTORY, SLOT, U256::from(99)).unwrap();
+    ctx.journaled_state.commit_tx();
+    assert_eq!(read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 2120), U256::from(99));
+    assert_eq!(read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 120), U256::from(99));
+    let account = &ctx.journaled_state.inner.state[&HISTORY];
+    assert_eq!(account.info, *account.original_info);
+    assert!(!account.is_created_locally());
+    assert!(!account.is_selfdestructed_locally());
+}
+
+#[test]
 fn reverting_children_pay_cold_again_without_reloading_cached_values() {
     let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI);
     let outer = ctx.journaled_state.checkpoint();
@@ -280,6 +374,8 @@ fn database_errors_keep_their_original_type() {
         let (_, result) = run(&mut ctx, BLOCKHASH, U256::from(NUMBER), 2120);
         assert_eq!(result, InstructionResult::FatalExternalError);
         assert!(matches!(ctx.error, Err(ContextError::Db(error)) if error == failure));
+        assert_eq!(ctx.journaled_state.depth(), 0);
+        assert!(ctx.journaled_state.inner.journal.is_empty());
     }
 }
 
