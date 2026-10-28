@@ -784,4 +784,29 @@ mod tests {
 
         Ok(())
     }
+
+    #[rstest]
+    #[case::call(TxKind::Call(TO), 21_000)]
+    #[case::create(TxKind::Create, 53_000)]
+    fn test_upfront_balance_overflow_before_tsuki_v2(
+        #[case] kind: TxKind,
+        #[case] gas_limit: u64,
+    ) -> Result<(), Box<dyn core::error::Error>> {
+        let ctx =
+            context_with_spec(ScrollSpecId::TSUKI).with_funds(U256::MAX).modify_tx_chained(|tx| {
+                tx.base.kind = kind;
+                tx.base.gas_limit = gas_limit;
+                tx.base.value = U256::MAX - U256::from(gas_limit);
+            });
+        let mut evm = ctx.build_scroll();
+        let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+
+        // The mainnet check never adds the L1 fee, and the remaining balance covers it.
+        handler.pre_execution(&mut evm)?;
+        let caller = evm.ctx_mut().journal_mut().load_account(CALLER)?;
+        assert_eq!(caller.info.balance, U256::MAX - U256::from(gas_limit) - L1_DATA_COST);
+        assert_eq!(caller.info.nonce, u64::from(kind.is_call()));
+
+        Ok(())
+    }
 }

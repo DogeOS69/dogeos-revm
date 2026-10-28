@@ -141,7 +141,7 @@ fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionCon
                 gas!(interpreter, host.gas_params().warm_storage_read_cost());
                 let additional_cold_cost = host.gas_params().cold_storage_additional_cost();
                 let skip_cold = interpreter.gas.remaining() < additional_cold_cost;
-                match tsuki_history_sload(host, index, skip_cold) {
+                match eip7709_history_sload(host, index, skip_cold) {
                     Ok(value) => {
                         if value.is_cold {
                             gas!(interpreter, additional_cold_cost);
@@ -181,7 +181,7 @@ fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionCon
 /// A warm-slot probe avoids reloading a cold account and accumulating account journal entries on
 /// every warm BLOCKHASH. Revm returns `ColdLoadSkipped` for an absent account or a cold slot;
 /// access lists and transaction IDs are handled by the same SLOAD path as ordinary storage reads.
-fn tsuki_history_sload<H: ScrollContextTr>(
+fn eip7709_history_sload<H: ScrollContextTr>(
     host: &mut H,
     index: U256,
     skip_cold: bool,
