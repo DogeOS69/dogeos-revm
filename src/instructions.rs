@@ -101,7 +101,7 @@ pub fn make_scroll_instruction_table<WIRE: InterpreterTypes, HOST: ScrollContext
 ///
 /// If the requested block number is the current block number, a future block number or a block
 /// number older than `BLOCK_HASH_HISTORY` we return 0.
-/// The interpreter charges the base 20 gas. From Tsuki, valid lookups additionally charge
+/// The interpreter charges the base 20 gas. From TsukiV2, valid lookups additionally charge
 /// SLOAD gas and warm the history slot as specified by EIP-7709.
 fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionContext<'_, H, WIRE>) {
     let host = context.host;
@@ -137,7 +137,7 @@ fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionCon
             let requested_block_number_u64 = as_u64_saturated!(requested_number);
             let index = U256::from(requested_block_number_u64.wrapping_rem(HISTORY_SERVE_WINDOW));
 
-            if host.cfg().spec().is_enabled_in(ScrollSpecId::TSUKI) {
+            if host.cfg().spec().is_enabled_in(ScrollSpecId::TSUKI_V2) {
                 gas!(interpreter, host.gas_params().warm_storage_read_cost());
                 let additional_cold_cost = host.gas_params().cold_storage_additional_cost();
                 let skip_cold = interpreter.gas.remaining() < additional_cold_cost;
@@ -158,7 +158,7 @@ fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionCon
                     }
                 }
             } else {
-                // Preserve the pre-Tsuki account/code accesses and fixed 20 gas charge.
+                // Preserve the pre-TsukiV2 account/code accesses and fixed 20 gas charge.
                 // sload assumes that the account is present in the journal
                 if host.load_account_delegated(HISTORY_STORAGE_ADDRESS).is_none() {
                     interpreter.halt(InstructionResult::FatalExternalError);

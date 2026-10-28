@@ -31,9 +31,9 @@ Update the pins deliberately when the consuming repositories change toolchains;
 floating `stable` or `nightly` channels can introduce new lints independently of
 the execution/prover build environments.
 
-## Tsuki BLOCKHASH pricing
+## TsukiV2 BLOCKHASH pricing
 
-Tsuki activates [EIP-7709](https://eips.ethereum.org/EIPS/eip-7709). An in-window
+TsukiV2 activates [EIP-7709](https://eips.ethereum.org/EIPS/eip-7709). An in-window
 `BLOCKHASH` retains its 20 gas base cost and additionally pays the ordinary SLOAD
 cost for the EIP-2935 history slot: 2120 gas total when cold, or 120 when warm.
 The slot shares warming and revert semantics with SLOAD and transaction access
@@ -42,8 +42,8 @@ This follows EIP-7709's rule that only SLOAD effects apply, including when a cli
 internally resolves the value through the system contract's `get` entry point:
 that internal resolution must not leave the account warm as a normal CALL would.
 Queries outside the last 256 ancestors still return zero for 20 gas without a
-storage access. Earlier forks retain their existing behavior.
+storage access. Earlier forks, including Tsuki, retain the fixed 20 gas charge.
 
-This uses the existing Tsuki spec selection; no activation timestamp is added in
+This uses the `TSUKI_V2` spec selection; no activation timestamp is added in
 this crate. Chains must have EIP-2935 history populated for at least 256 blocks
 before activation, or enable both EIPs at genesis as permitted by EIP-7709.

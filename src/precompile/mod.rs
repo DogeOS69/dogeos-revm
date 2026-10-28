@@ -35,7 +35,7 @@ impl ScrollPrecompileProvider {
             ScrollSpecId::EUCLID => PrecompilesMap::from_static(euclid()),
             ScrollSpecId::FEYNMAN => PrecompilesMap::from_static(feynman()),
             ScrollSpecId::GALILEO => PrecompilesMap::from_static(galileo()),
-            ScrollSpecId::TSUKI => tsuki(),
+            ScrollSpecId::TSUKI | ScrollSpecId::TSUKI_V2 => tsuki(),
         };
         Self { inner, spec }
     }
