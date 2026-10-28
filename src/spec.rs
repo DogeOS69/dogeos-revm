@@ -14,6 +14,7 @@ pub enum ScrollSpecId {
     FEYNMAN = 6,
     GALILEO = 7,
     TSUKI = 8,
+    TSUKI_V2 = 9,
 }
 
 impl ScrollSpecId {
@@ -45,7 +46,8 @@ impl ScrollSpecId {
             Self::EUCLID |
             Self::FEYNMAN |
             Self::GALILEO |
-            Self::TSUKI => SpecId::SHANGHAI,
+            Self::TSUKI |
+            Self::TSUKI_V2 => SpecId::SHANGHAI,
         }
     }
 }
@@ -68,6 +70,7 @@ pub mod name {
     pub const FEYNMAN: &str = "feynman";
     pub const GALILEO: &str = "galileo";
     pub const TSUKI: &str = "tsuki";
+    pub const TSUKI_V2: &str = "tsukiV2";
 }
 
 impl From<&str> for ScrollSpecId {
@@ -81,6 +84,7 @@ impl From<&str> for ScrollSpecId {
             name::FEYNMAN => Self::FEYNMAN,
             name::GALILEO => Self::GALILEO,
             name::TSUKI => Self::TSUKI,
+            name::TSUKI_V2 => Self::TSUKI_V2,
             _ => Self::default(),
         }
     }
@@ -97,6 +101,42 @@ impl From<ScrollSpecId> for &'static str {
             ScrollSpecId::FEYNMAN => name::FEYNMAN,
             ScrollSpecId::GALILEO => name::GALILEO,
             ScrollSpecId::TSUKI => name::TSUKI,
+            ScrollSpecId::TSUKI_V2 => name::TSUKI_V2,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spec_names_round_trip() {
+        for spec in [
+            ScrollSpecId::SHANGHAI,
+            ScrollSpecId::BERNOULLI,
+            ScrollSpecId::CURIE,
+            ScrollSpecId::DARWIN,
+            ScrollSpecId::EUCLID,
+            ScrollSpecId::FEYNMAN,
+            ScrollSpecId::GALILEO,
+            ScrollSpecId::TSUKI,
+            ScrollSpecId::TSUKI_V2,
+        ] {
+            let name: &'static str = spec.into();
+            assert_eq!(ScrollSpecId::from(name), spec);
+            assert_eq!(ScrollSpecId::try_from_u8(spec as u8), Some(spec));
+        }
+    }
+
+    #[test]
+    fn tsuki_v2_follows_tsuki() {
+        let name: &'static str = ScrollSpecId::TSUKI_V2.into();
+        assert_eq!(name, "tsukiV2");
+        assert_eq!(ScrollSpecId::TSUKI_V2 as u8, 9);
+        assert_eq!(ScrollSpecId::try_from_u8(10), None);
+        assert_eq!(SpecId::from(ScrollSpecId::TSUKI_V2), SpecId::SHANGHAI);
+        assert!(ScrollSpecId::TSUKI_V2.is_enabled_in(ScrollSpecId::TSUKI));
+        assert!(!ScrollSpecId::TSUKI.is_enabled_in(ScrollSpecId::TSUKI_V2));
     }
 }

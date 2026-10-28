@@ -3,7 +3,10 @@
 use crate::{exec::ScrollContextTr, l1block::L1BlockInfo, transaction::ScrollTxTr, ScrollSpecId};
 use revm::{
     context::{
-        result::{ExecutionResult, HaltReason, InvalidHeader, InvalidTransaction, ResultGas},
+        result::{
+            ExecutionResult, FromStringError, HaltReason, InvalidHeader, InvalidTransaction,
+            ResultGas,
+        },
         transaction::AccessListItemTr,
         Block, Cfg, ContextTr, JournalTr, Transaction,
     },
@@ -304,54 +307,67 @@ where
         let spec = ctx_ref.cfg().spec();
         let is_eip3607_disabled = ctx_ref.cfg().is_eip3607_disabled();
 
-        // Validate total spending against the original balance before any deduction.
-        let tx_l1_cost = if !is_l1_msg && !is_system_tx {
-            let ctx = evm.ctx();
-            let balance = *ctx.journal_mut().load_account_mut(caller)?.balance();
-            let l1_block_info = ctx.chain().l1_block_info.clone();
-            let Some(rlp_bytes) = ctx.tx().rlp_bytes() else {
-                return Err(ERROR::from_string(
-                    "[SCROLL] Failed to load transaction rlp_bytes.".to_string(),
-                ));
-            };
-
-            // Calculate the L1 fee.
-            let tx_l1_cost = l1_block_info.calculate_tx_l1_cost(
-                rlp_bytes,
-                spec,
-                ctx.tx().compression_ratio(),
-                ctx.tx().compressed_size(),
-            );
-
-            let required_balance = ctx
-                .tx()
-                .max_balance_spending()?
-                .checked_add(tx_l1_cost)
-                .ok_or(InvalidTransaction::OverflowPaymentInTransaction)?;
-
-            if required_balance > balance {
-                return Err(InvalidTransaction::LackOfFundForMaxFee {
-                    fee: required_balance.into(),
-                    balance: balance.into(),
-                }
-                .into());
+        let ctx = if !spec.is_enabled_in(ScrollSpecId::TSUKI_V2) {
+            // Before TsukiV2, the mainnet check and deduction run first and the L1 fee is then
+            // checked against the remaining balance.
+            if !is_l1_msg {
+                self.mainnet.validate_against_state_and_deduct_caller(evm)?;
             }
 
-            tx_l1_cost
+            let ctx = evm.ctx();
+            if !is_l1_msg && !is_system_tx {
+                let tx_l1_cost = tx_l1_cost::<_, ERROR>(ctx, spec)?;
+                let mut caller_account = ctx.journal_mut().load_account_mut(caller)?;
+
+                if tx_l1_cost > *caller_account.balance() {
+                    return Err(InvalidTransaction::LackOfFundForMaxFee {
+                        fee: tx_l1_cost.into(),
+                        balance: (*caller_account.balance()).into(),
+                    }
+                    .into());
+                }
+
+                caller_account.decr_balance(tx_l1_cost);
+            }
+            ctx
         } else {
-            U256::ZERO
+            // Validate total spending against the original balance before any deduction.
+            let tx_l1_cost = if !is_l1_msg && !is_system_tx {
+                let ctx = evm.ctx();
+                let balance = *ctx.journal_mut().load_account_mut(caller)?.balance();
+                let tx_l1_cost = tx_l1_cost::<_, ERROR>(ctx, spec)?;
+
+                let required_balance = ctx
+                    .tx()
+                    .max_balance_spending()?
+                    .checked_add(tx_l1_cost)
+                    .ok_or(InvalidTransaction::OverflowPaymentInTransaction)?;
+
+                if required_balance > balance {
+                    return Err(InvalidTransaction::LackOfFundForMaxFee {
+                        fee: required_balance.into(),
+                        balance: balance.into(),
+                    }
+                    .into());
+                }
+
+                tx_l1_cost
+            } else {
+                U256::ZERO
+            };
+
+            // execute normal checks and transaction processing logic for non-l1-msgs
+            if !is_l1_msg {
+                self.mainnet.validate_against_state_and_deduct_caller(evm)?;
+            }
+
+            let ctx = evm.ctx();
+            if !is_l1_msg && !is_system_tx {
+                // Deduct the L1 data fee after validating total spending.
+                ctx.journal_mut().load_account_mut(caller)?.decr_balance(tx_l1_cost);
+            }
+            ctx
         };
-
-        // execute normal checks and transaction processing logic for non-l1-msgs
-        if !is_l1_msg {
-            self.mainnet.validate_against_state_and_deduct_caller(evm)?;
-        }
-
-        let ctx = evm.ctx();
-        if !is_l1_msg && !is_system_tx {
-            // Deduct the L1 data fee after validating total spending.
-            ctx.journal_mut().load_account_mut(caller)?.decr_balance(tx_l1_cost);
-        }
 
         // execute l1 msg checks
         if is_l1_msg {
@@ -534,6 +550,26 @@ where
     type IT = EthInterpreter;
 }
 
+/// Calculates the L1 data fee of a fee-charged transaction.
+#[inline]
+fn tx_l1_cost<CTX: ScrollContextTr, ERROR: FromStringError>(
+    ctx: &CTX,
+    spec: ScrollSpecId,
+) -> Result<U256, ERROR> {
+    let Some(rlp_bytes) = ctx.tx().rlp_bytes() else {
+        return Err(ERROR::from_string(
+            "[SCROLL] Failed to load transaction rlp_bytes.".to_string(),
+        ));
+    };
+
+    Ok(ctx.chain().l1_block_info.calculate_tx_l1_cost(
+        rlp_bytes,
+        spec,
+        ctx.tx().compression_ratio(),
+        ctx.tx().compressed_size(),
+    ))
+}
+
 // Mirrors revm v103 `crates/handler/src/validation.rs::validate_priority_fee_for_tx`.
 #[inline]
 fn validate_priority_fee_for_tx<TX: Transaction>(
@@ -555,7 +591,7 @@ mod tests {
     use crate::{
         builder::ScrollBuilder,
         test_utils::{
-            context, ScrollContextTestUtils, BENEFICIARY, CALLER, L1_DATA_COST,
+            context, context_with_spec, ScrollContextTestUtils, BENEFICIARY, CALLER, L1_DATA_COST,
             MIN_TRANSACTION_COST, TO,
         },
     };
@@ -580,11 +616,13 @@ mod tests {
         let value = U256::from(100);
         let required_balance = U256::from(gas_limit) + value + L1_DATA_COST;
         let initial_balance = required_balance - U256::ONE;
-        let ctx = context().with_funds(initial_balance).modify_tx_chained(|tx| {
-            tx.base.kind = kind;
-            tx.base.gas_limit = gas_limit;
-            tx.base.value = value;
-        });
+        let ctx = context_with_spec(ScrollSpecId::TSUKI_V2)
+            .with_funds(initial_balance)
+            .modify_tx_chained(|tx| {
+                tx.base.kind = kind;
+                tx.base.gas_limit = gas_limit;
+                tx.base.value = value;
+            });
         let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
@@ -624,11 +662,13 @@ mod tests {
     ) -> Result<(), Box<dyn core::error::Error>> {
         let value = U256::from(100);
         let initial_balance = U256::from(gas_limit) + value + L1_DATA_COST;
-        let ctx = context().with_funds(initial_balance).modify_tx_chained(|tx| {
-            tx.base.kind = kind;
-            tx.base.gas_limit = gas_limit;
-            tx.base.value = value;
-        });
+        let ctx = context_with_spec(ScrollSpecId::TSUKI_V2)
+            .with_funds(initial_balance)
+            .modify_tx_chained(|tx| {
+                tx.base.kind = kind;
+                tx.base.gas_limit = gas_limit;
+                tx.base.value = value;
+            });
         let tx = ctx.tx.clone();
         let mut evm = ctx.build_scroll();
 
@@ -723,12 +763,14 @@ mod tests {
         #[case] kind: TxKind,
         #[case] gas_limit: u64,
     ) -> Result<(), Box<dyn core::error::Error>> {
-        let ctx = context().with_funds(U256::MAX).modify_tx_chained(|tx| {
-            tx.base.kind = kind;
-            tx.base.gas_limit = gas_limit;
-            // Gas and value fit exactly, but adding the L1 fee overflows.
-            tx.base.value = U256::MAX - U256::from(gas_limit);
-        });
+        let ctx = context_with_spec(ScrollSpecId::TSUKI_V2)
+            .with_funds(U256::MAX)
+            .modify_tx_chained(|tx| {
+                tx.base.kind = kind;
+                tx.base.gas_limit = gas_limit;
+                // Gas and value fit exactly, but adding the L1 fee overflows.
+                tx.base.value = U256::MAX - U256::from(gas_limit);
+            });
         let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
@@ -739,6 +781,31 @@ mod tests {
         let caller = evm.ctx_mut().journal_mut().load_account(CALLER)?;
         assert_eq!(caller.info.balance, U256::MAX);
         assert_eq!(caller.info.nonce, 0);
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::call(TxKind::Call(TO), 21_000)]
+    #[case::create(TxKind::Create, 53_000)]
+    fn test_upfront_balance_overflow_before_tsuki_v2(
+        #[case] kind: TxKind,
+        #[case] gas_limit: u64,
+    ) -> Result<(), Box<dyn core::error::Error>> {
+        let ctx =
+            context_with_spec(ScrollSpecId::TSUKI).with_funds(U256::MAX).modify_tx_chained(|tx| {
+                tx.base.kind = kind;
+                tx.base.gas_limit = gas_limit;
+                tx.base.value = U256::MAX - U256::from(gas_limit);
+            });
+        let mut evm = ctx.build_scroll();
+        let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+
+        // The mainnet check never adds the L1 fee, and the remaining balance covers it.
+        handler.pre_execution(&mut evm)?;
+        let caller = evm.ctx_mut().journal_mut().load_account(CALLER)?;
+        assert_eq!(caller.info.balance, U256::MAX - U256::from(gas_limit) - L1_DATA_COST);
+        assert_eq!(caller.info.nonce, u64::from(kind.is_call()));
 
         Ok(())
     }

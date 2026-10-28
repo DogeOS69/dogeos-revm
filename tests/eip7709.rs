@@ -1,4 +1,4 @@
-//! EIP-7709 activates at Tsuki and shares ordinary SLOAD access semantics.
+//! EIP-7709 activates at TsukiV2 and shares ordinary SLOAD access semantics.
 use revm::{
     bytecode::{opcode::*, Bytecode},
     context::JournalTr,
@@ -57,11 +57,12 @@ fn read<DB: Database>(ctx: &mut ScrollContext<DB>, opcode: u8, arg: U256, gas: u
 }
 
 #[test]
-fn tsuki_activation_preserves_earlier_forks() {
+fn tsuki_v2_activation_preserves_earlier_forks() {
     for (spec, cold, warm) in [
         (ScrollSpecId::FEYNMAN, 20, 20),
         (ScrollSpecId::GALILEO, 20, 20),
-        (ScrollSpecId::TSUKI, 2120, 120),
+        (ScrollSpecId::TSUKI, 20, 20),
+        (ScrollSpecId::TSUKI_V2, 2120, 120),
     ] {
         let mut ctx = seeded(spec);
         assert_eq!(read(&mut ctx, BLOCKHASH, U256::from(NUMBER), cold), U256::from(42));
@@ -72,7 +73,7 @@ fn tsuki_activation_preserves_earlier_forks() {
 #[test]
 fn blockhash_and_sload_share_slot_warmth_in_both_directions() {
     for blockhash_first in [false, true] {
-        let mut ctx = seeded(ScrollSpecId::TSUKI);
+        let mut ctx = seeded(ScrollSpecId::TSUKI_V2);
         ctx.load_account_delegated(HISTORY).unwrap();
         let reads = if blockhash_first {
             [(BLOCKHASH, U256::from(NUMBER), 2120), (SLOAD, SLOT, 100)]
@@ -90,7 +91,7 @@ fn blockhash_and_sload_share_slot_warmth_in_both_directions() {
 #[test]
 fn blockhash_preserves_account_warmth() {
     for warm_account in [false, true] {
-        let mut ctx = seeded(ScrollSpecId::TSUKI);
+        let mut ctx = seeded(ScrollSpecId::TSUKI_V2);
         if warm_account {
             ctx.load_account_delegated(HISTORY).unwrap();
         }
@@ -107,7 +108,7 @@ fn blockhash_preserves_account_warmth() {
 #[test]
 fn warm_blockhash_reads_do_not_grow_the_journal() {
     for warm_account in [false, true] {
-        let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI);
+        let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI_V2);
         if warm_account {
             ctx.load_account_delegated(HISTORY).unwrap();
         }
@@ -142,7 +143,7 @@ fn cached_history_respects_transaction_boundaries_and_new_access_lists() {
     // 0: no access list; 1: account only; 2: account and slot.
     for previous_list in 0..=2 {
         for next_list in 0..=2 {
-            let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI);
+            let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI_V2);
             for (tx, list_kind) in [(0, previous_list), (1, next_list)] {
                 if list_kind != 0 {
                     let mut list = AddressMap::default();
@@ -186,7 +187,7 @@ fn cached_history_respects_transaction_boundaries_and_new_access_lists() {
 
 #[test]
 fn committed_history_writes_remain_visible_in_the_next_transaction() {
-    let mut ctx = seeded(ScrollSpecId::TSUKI);
+    let mut ctx = seeded(ScrollSpecId::TSUKI_V2);
     ctx.load_account_delegated(HISTORY).unwrap();
     ctx.journaled_state.sstore(HISTORY, SLOT, U256::from(99)).unwrap();
     ctx.journaled_state.commit_tx();
@@ -200,7 +201,7 @@ fn committed_history_writes_remain_visible_in_the_next_transaction() {
 
 #[test]
 fn reverting_children_pay_cold_again_without_reloading_cached_values() {
-    let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI);
+    let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI_V2);
     let outer = ctx.journaled_state.checkpoint();
     for _ in 0..3 {
         let child = ctx.journaled_state.checkpoint();
@@ -223,7 +224,7 @@ fn reverting_children_pay_cold_again_without_reloading_cached_values() {
 
 #[test]
 fn reverted_child_preserves_slot_warmed_by_parent() {
-    let mut ctx = seeded(ScrollSpecId::TSUKI);
+    let mut ctx = seeded(ScrollSpecId::TSUKI_V2);
     read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 2120);
     let child = ctx.journaled_state.checkpoint();
     read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 120);
@@ -234,7 +235,7 @@ fn reverted_child_preserves_slot_warmed_by_parent() {
 #[test]
 fn access_list_warms_only_listed_slots_and_survives_revert() {
     for include_slot in [false, true] {
-        let mut ctx = seeded(ScrollSpecId::TSUKI);
+        let mut ctx = seeded(ScrollSpecId::TSUKI_V2);
         let mut list = AddressMap::default();
         list.insert(
             HISTORY,
@@ -252,7 +253,7 @@ fn access_list_warms_only_listed_slots_and_survives_revert() {
 
 #[test]
 fn blockhash_observes_storage_writes_and_their_rollback() {
-    let mut ctx = seeded(ScrollSpecId::TSUKI);
+    let mut ctx = seeded(ScrollSpecId::TSUKI_V2);
     assert_eq!(read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 2120), U256::from(42));
     ctx.load_account_delegated(HISTORY).unwrap();
     let child = ctx.journaled_state.checkpoint();
@@ -268,7 +269,7 @@ fn history_window_and_ring_buffer_boundaries() {
         for age in [0, 1, 255, 256, 257] {
             let Some(number) = current.checked_sub(age) else { continue };
             let valid = (1..=256).contains(&age);
-            let mut ctx = seeded(ScrollSpecId::TSUKI);
+            let mut ctx = seeded(ScrollSpecId::TSUKI_V2);
             ctx.block.number = U256::from(current);
             let key = U256::from(number % 8191);
             ctx.journaled_state
@@ -283,7 +284,7 @@ fn history_window_and_ring_buffer_boundaries() {
         }
     }
     for number in [U256::from(CURRENT + 1), U256::MAX] {
-        let mut ctx = seeded(ScrollSpecId::TSUKI);
+        let mut ctx = seeded(ScrollSpecId::TSUKI_V2);
         assert_eq!(read(&mut ctx, BLOCKHASH, number, 20), U256::ZERO);
         assert!(ctx.journaled_state.inner.state.is_empty());
     }
@@ -293,7 +294,7 @@ fn history_window_and_ring_buffer_boundaries() {
 fn insufficient_gas_never_reads_or_warms_a_cold_slot() {
     for cached in [false, true] {
         for gas in [19, 20, 119, 120, 2119] {
-            let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI);
+            let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI_V2);
             if cached {
                 let child = ctx.journaled_state.checkpoint();
                 read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 2120);
@@ -307,7 +308,7 @@ fn insufficient_gas_never_reads_or_warms_a_cold_slot() {
             assert_eq!(ctx.journaled_state.database.storage_reads, 1);
         }
     }
-    let mut ctx = seeded(ScrollSpecId::TSUKI);
+    let mut ctx = seeded(ScrollSpecId::TSUKI_V2);
     read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 2120);
     let (_, result) = run(&mut ctx, BLOCKHASH, U256::from(NUMBER), 119);
     assert_eq!(result, InstructionResult::OutOfGas);
@@ -369,8 +370,10 @@ impl Database for CountingDb {
 #[test]
 fn database_errors_keep_their_original_type() {
     for failure in [Failure::Basic, Failure::Storage] {
-        let mut ctx =
-            context(CountingDb { fail: Some(failure), ..Default::default() }, ScrollSpecId::TSUKI);
+        let mut ctx = context(
+            CountingDb { fail: Some(failure), ..Default::default() },
+            ScrollSpecId::TSUKI_V2,
+        );
         let (_, result) = run(&mut ctx, BLOCKHASH, U256::from(NUMBER), 2120);
         assert_eq!(result, InstructionResult::FatalExternalError);
         assert!(matches!(ctx.error, Err(ContextError::Db(error)) if error == failure));
@@ -380,9 +383,12 @@ fn database_errors_keep_their_original_type() {
 }
 
 #[test]
-fn history_bytecode_is_only_loaded_before_tsuki() {
-    for (spec, gas, code_reads) in [(ScrollSpecId::GALILEO, 20, 1), (ScrollSpecId::TSUKI, 2120, 0)]
-    {
+fn history_bytecode_is_only_loaded_before_tsuki_v2() {
+    for (spec, gas, code_reads) in [
+        (ScrollSpecId::GALILEO, 20, 1),
+        (ScrollSpecId::TSUKI, 20, 1),
+        (ScrollSpecId::TSUKI_V2, 2120, 0),
+    ] {
         let mut ctx = context(CountingDb::default(), spec);
         assert_eq!(read(&mut ctx, BLOCKHASH, U256::from(NUMBER), gas), U256::from(42));
         assert_eq!(ctx.journaled_state.database.code_reads, code_reads);
@@ -391,7 +397,7 @@ fn history_bytecode_is_only_loaded_before_tsuki() {
 
 #[test]
 fn system_contract_updates_are_visible_after_ring_buffer_wrap() {
-    let mut ctx = seeded(ScrollSpecId::TSUKI);
+    let mut ctx = seeded(ScrollSpecId::TSUKI_V2);
     // Canonical runtime bytecode from https://eips.ethereum.org/EIPS/eip-2935.
     let code = Bytecode::new_legacy(bytes!(
         "3373fffffffffffffffffffffffffffffffffffffffe14604657602036036042575f35600143038111604257611fff81430311604257611fff9006545f5260205ff35b5f5ffd5b5f35611fff60014303065500"
@@ -415,7 +421,7 @@ fn system_contract_updates_are_visible_after_ring_buffer_wrap() {
 fn real_staticcall_frames_charge_cold_again_only_after_revert() {
     const PARENT: Address = address!("1000000000000000000000000000000000000001");
     const CHILD: Address = address!("1000000000000000000000000000000000000002");
-    for spec in [ScrollSpecId::GALILEO, ScrollSpecId::TSUKI] {
+    for spec in [ScrollSpecId::GALILEO, ScrollSpecId::TSUKI, ScrollSpecId::TSUKI_V2] {
         for revert in [false, true] {
             let mut ctx = seeded(spec);
             // Measure one BLOCKHASH with GAS and return the measured cost, including on REVERT.
@@ -454,7 +460,7 @@ fn real_staticcall_frames_charge_cold_again_only_after_revert() {
             assert!(result.is_success());
             let output = result.output().unwrap();
             assert_eq!(output.len(), 64);
-            let costs: [u64; 2] = if spec == ScrollSpecId::TSUKI {
+            let costs: [u64; 2] = if spec == ScrollSpecId::TSUKI_V2 {
                 [2120, if revert { 2120 } else { 120 }]
             } else {
                 [20, 20]
