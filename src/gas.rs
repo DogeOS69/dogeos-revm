@@ -55,6 +55,7 @@ mod tests {
             ScrollSpecId::FEYNMAN,
             ScrollSpecId::GALILEO,
             ScrollSpecId::TSUKI,
+            ScrollSpecId::TSUKI_V2,
         ] {
             let params = GasParams::new_scroll_spec(spec);
             assert_eq!(

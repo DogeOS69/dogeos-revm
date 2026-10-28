@@ -1,6 +1,7 @@
 use crate::{
-    builder::{DefaultScrollContext, ScrollContext},
-    l1block::L1_GAS_PRICE_ORACLE_ADDRESS,
+    builder::{DefaultScrollContext, ScrollCfgExt, ScrollContext},
+    l1block::{L1_GAS_PRICE_ORACLE_ADDRESS, PENALTY_FACTOR_SLOT},
+    ScrollSpecId,
 };
 use revm::{
     database::{DbAccount, InMemoryDB},
@@ -52,6 +53,19 @@ pub fn context() -> ScrollContext<InMemoryDB> {
                     .collect(),
             );
         })
+}
+
+/// Returns [`context`] configured for `spec`, with the compression inputs that Feynman and later
+/// L1 fee formulas require. The L1 data fee stays [`L1_DATA_COST`] for every spec.
+pub fn context_with_spec(spec: ScrollSpecId) -> ScrollContext<InMemoryDB> {
+    context()
+        .modify_cfg_chained(|cfg| cfg.set_scroll_spec(spec))
+        .modify_tx_chained(|tx| {
+            tx.compression_ratio = Some(TX_L1_FEE_PRECISION);
+            tx.compressed_size = Some(4);
+        })
+        // Disable the Galileo compression penalty.
+        .with_gas_oracle_config(Vec::from([(PENALTY_FACTOR_SLOT, U256::MAX)]))
 }
 
 pub trait ScrollContextTestUtils {

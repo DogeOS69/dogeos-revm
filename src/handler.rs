@@ -591,7 +591,7 @@ mod tests {
     use crate::{
         builder::ScrollBuilder,
         test_utils::{
-            context, ScrollContextTestUtils, BENEFICIARY, CALLER, L1_DATA_COST,
+            context, context_with_spec, ScrollContextTestUtils, BENEFICIARY, CALLER, L1_DATA_COST,
             MIN_TRANSACTION_COST, TO,
         },
     };
@@ -616,11 +616,13 @@ mod tests {
         let value = U256::from(100);
         let required_balance = U256::from(gas_limit) + value + L1_DATA_COST;
         let initial_balance = required_balance - U256::ONE;
-        let ctx = context().with_funds(initial_balance).modify_tx_chained(|tx| {
-            tx.base.kind = kind;
-            tx.base.gas_limit = gas_limit;
-            tx.base.value = value;
-        });
+        let ctx = context_with_spec(ScrollSpecId::TSUKI_V2)
+            .with_funds(initial_balance)
+            .modify_tx_chained(|tx| {
+                tx.base.kind = kind;
+                tx.base.gas_limit = gas_limit;
+                tx.base.value = value;
+            });
         let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 
@@ -660,11 +662,13 @@ mod tests {
     ) -> Result<(), Box<dyn core::error::Error>> {
         let value = U256::from(100);
         let initial_balance = U256::from(gas_limit) + value + L1_DATA_COST;
-        let ctx = context().with_funds(initial_balance).modify_tx_chained(|tx| {
-            tx.base.kind = kind;
-            tx.base.gas_limit = gas_limit;
-            tx.base.value = value;
-        });
+        let ctx = context_with_spec(ScrollSpecId::TSUKI_V2)
+            .with_funds(initial_balance)
+            .modify_tx_chained(|tx| {
+                tx.base.kind = kind;
+                tx.base.gas_limit = gas_limit;
+                tx.base.value = value;
+            });
         let tx = ctx.tx.clone();
         let mut evm = ctx.build_scroll();
 
@@ -759,12 +763,14 @@ mod tests {
         #[case] kind: TxKind,
         #[case] gas_limit: u64,
     ) -> Result<(), Box<dyn core::error::Error>> {
-        let ctx = context().with_funds(U256::MAX).modify_tx_chained(|tx| {
-            tx.base.kind = kind;
-            tx.base.gas_limit = gas_limit;
-            // Gas and value fit exactly, but adding the L1 fee overflows.
-            tx.base.value = U256::MAX - U256::from(gas_limit);
-        });
+        let ctx = context_with_spec(ScrollSpecId::TSUKI_V2)
+            .with_funds(U256::MAX)
+            .modify_tx_chained(|tx| {
+                tx.base.kind = kind;
+                tx.base.gas_limit = gas_limit;
+                // Gas and value fit exactly, but adding the L1 fee overflows.
+                tx.base.value = U256::MAX - U256::from(gas_limit);
+            });
         let mut evm = ctx.build_scroll();
         let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
 

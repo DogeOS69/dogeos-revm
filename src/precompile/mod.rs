@@ -326,6 +326,7 @@ mod tests {
             ScrollSpecId::FEYNMAN,
             ScrollSpecId::GALILEO,
             ScrollSpecId::TSUKI,
+            ScrollSpecId::TSUKI_V2,
         ] {
             let cfg = CfgEnv::new_scroll(spec);
 
@@ -412,6 +413,31 @@ mod tests {
                 .expect_err("transfer precompile should reject gas below its expected cost");
                 assert_eq!(err, PrecompileError::OutOfGas);
             }
+        }
+    }
+
+    #[test]
+    fn tsuki_v2_precompiles_match_tsuki() {
+        let tsuki = precompiles_for_spec(ScrollSpecId::TSUKI);
+        let tsuki_v2 = precompiles_for_spec(ScrollSpecId::TSUKI_V2);
+
+        let mut tsuki_addresses = tsuki.addresses().copied().collect::<Vec<_>>();
+        let mut tsuki_v2_addresses = tsuki_v2.addresses().copied().collect::<Vec<_>>();
+        tsuki_addresses.sort_unstable();
+        tsuki_v2_addresses.sort_unstable();
+        assert_eq!(tsuki_v2_addresses, tsuki_addresses);
+
+        for address in tsuki_addresses {
+            assert_eq!(
+                tsuki_v2.get(&address).unwrap().precompile_id(),
+                tsuki.get(&address).unwrap().precompile_id(),
+                "precompile id at {address}"
+            );
+            assert_eq!(
+                expected_zero_input_gas(ScrollSpecId::TSUKI_V2, address),
+                expected_zero_input_gas(ScrollSpecId::TSUKI, address),
+                "zero-input gas at {address}"
+            );
         }
     }
 

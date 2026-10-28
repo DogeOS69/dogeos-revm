@@ -105,3 +105,38 @@ impl From<ScrollSpecId> for &'static str {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spec_names_round_trip() {
+        for spec in [
+            ScrollSpecId::SHANGHAI,
+            ScrollSpecId::BERNOULLI,
+            ScrollSpecId::CURIE,
+            ScrollSpecId::DARWIN,
+            ScrollSpecId::EUCLID,
+            ScrollSpecId::FEYNMAN,
+            ScrollSpecId::GALILEO,
+            ScrollSpecId::TSUKI,
+            ScrollSpecId::TSUKI_V2,
+        ] {
+            let name: &'static str = spec.into();
+            assert_eq!(ScrollSpecId::from(name), spec);
+            assert_eq!(ScrollSpecId::try_from_u8(spec as u8), Some(spec));
+        }
+    }
+
+    #[test]
+    fn tsuki_v2_follows_tsuki() {
+        let name: &'static str = ScrollSpecId::TSUKI_V2.into();
+        assert_eq!(name, "tsukiV2");
+        assert_eq!(ScrollSpecId::TSUKI_V2 as u8, 9);
+        assert_eq!(ScrollSpecId::try_from_u8(10), None);
+        assert_eq!(SpecId::from(ScrollSpecId::TSUKI_V2), SpecId::SHANGHAI);
+        assert!(ScrollSpecId::TSUKI_V2.is_enabled_in(ScrollSpecId::TSUKI));
+        assert!(!ScrollSpecId::TSUKI.is_enabled_in(ScrollSpecId::TSUKI_V2));
+    }
+}

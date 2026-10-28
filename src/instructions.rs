@@ -462,6 +462,7 @@ mod tests {
     #[case(FEYNMAN)]
     #[case(GALILEO)]
     #[case(TSUKI)]
+    #[case(TSUKI_V2)]
     fn test_scroll_static_gas_overrides_are_documented(#[case] spec: ScrollSpecId) {
         let scroll_table = test_instruction_table(spec);
         let eth_table =
@@ -485,6 +486,7 @@ mod tests {
     #[case(FEYNMAN)]
     #[case(GALILEO)]
     #[case(TSUKI)]
+    #[case(TSUKI_V2)]
     fn test_call_family_uses_berlin_warm_static_gas(#[case] spec: ScrollSpecId) {
         let table = test_instruction_table(spec);
 
