@@ -223,6 +223,70 @@ fn reverting_children_pay_cold_again_without_reloading_cached_values() {
 }
 
 #[test]
+fn cold_batches_preserve_account_warmth_and_reuse_all_history_slots() {
+    for warm_account in [false, true] {
+        let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI_V2);
+        if warm_account {
+            ctx.load_account_delegated(HISTORY).unwrap();
+        }
+        let before = ctx.journaled_state.inner.journal.len();
+        for _ in 0..5 {
+            let child = ctx.journaled_state.checkpoint();
+            for age in 0..256 {
+                assert_eq!(
+                    read(&mut ctx, BLOCKHASH, U256::from(NUMBER - age), 2120),
+                    U256::from(42)
+                );
+            }
+            // All reads after the first use a cached account, including cold slots.
+            assert_eq!(ctx.journaled_state.inner.journal.len(), before + 256);
+            let journal = &ctx.journaled_state.inner;
+            assert_eq!(journal.state[&HISTORY].storage.len(), 256);
+            assert_eq!(
+                journal.state[&HISTORY].is_cold_transaction_id(journal.transaction_id),
+                !warm_account
+            );
+            ctx.journaled_state.checkpoint_revert(child);
+            assert_eq!(ctx.journaled_state.inner.journal.len(), before);
+            assert_eq!(ctx.journaled_state.depth(), 0);
+        }
+        read(&mut ctx, BALANCE, HISTORY.into_word().into(), if warm_account { 100 } else { 2600 });
+        assert_eq!(ctx.journaled_state.database.basic_reads, 1);
+        assert_eq!(ctx.journaled_state.database.storage_reads, 256);
+    }
+}
+
+#[test]
+fn cached_history_read_refreshes_slot_original_value_before_a_reverted_write() {
+    let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI_V2);
+    ctx.load_account_delegated(HISTORY).unwrap();
+    ctx.journaled_state.balance_incr(HISTORY, U256::from(7)).unwrap();
+    ctx.journaled_state.sstore(HISTORY, SLOT, U256::from(99)).unwrap();
+    ctx.journaled_state.commit_tx();
+
+    // The account and slot are cached from tx1, but both are cold in tx2. Reading the
+    // slot must use tx1's committed value as its new original value for SSTORE accounting.
+    assert_eq!(read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 2120), U256::from(99));
+    let slot = &ctx.journaled_state.inner.state[&HISTORY].storage[&SLOT];
+    assert_eq!(slot.original_value(), U256::from(99));
+    assert!(!slot.is_changed());
+    assert_eq!(read(&mut ctx, BALANCE, HISTORY.into_word().into(), 2600), U256::from(7));
+    let account = &ctx.journaled_state.inner.state[&HISTORY];
+    assert_eq!(account.info, *account.original_info);
+
+    let child = ctx.journaled_state.checkpoint();
+    let stored = ctx.journaled_state.sstore(HISTORY, SLOT, U256::from(123)).unwrap();
+    assert_eq!(stored.original_value, U256::from(99));
+    assert_eq!(read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 120), U256::from(123));
+    ctx.journaled_state.checkpoint_revert(child);
+    assert_eq!(read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 120), U256::from(99));
+    ctx.journaled_state.commit_tx();
+    assert_eq!(read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 2120), U256::from(99));
+    assert_eq!(ctx.journaled_state.database.basic_reads, 1);
+    assert_eq!(ctx.journaled_state.database.storage_reads, 1);
+}
+
+#[test]
 fn reverted_child_preserves_slot_warmed_by_parent() {
     let mut ctx = seeded(ScrollSpecId::TSUKI_V2);
     read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 2120);
@@ -380,6 +444,24 @@ fn database_errors_keep_their_original_type() {
         assert_eq!(ctx.journaled_state.depth(), 0);
         assert!(ctx.journaled_state.inner.journal.is_empty());
     }
+}
+
+#[test]
+fn cached_account_storage_errors_preserve_warmth_and_the_parent_journal() {
+    let mut ctx = context(CountingDb::default(), ScrollSpecId::TSUKI_V2);
+    read(&mut ctx, BLOCKHASH, U256::from(NUMBER), 2120);
+    let before = ctx.journaled_state.inner.journal.len();
+    ctx.journaled_state.database.fail = Some(Failure::Storage);
+    let (_, result) = run(&mut ctx, BLOCKHASH, U256::from(NUMBER - 1), 2120);
+    assert_eq!(result, InstructionResult::FatalExternalError);
+    assert!(matches!(ctx.error, Err(ContextError::Db(Failure::Storage))));
+    let journal = &ctx.journaled_state.inner;
+    assert_eq!(journal.journal.len(), before);
+    assert_eq!(journal.depth, 0);
+    assert!(journal.state[&HISTORY].is_cold_transaction_id(journal.transaction_id));
+    assert_eq!(journal.state[&HISTORY].storage.len(), 1);
+    assert_eq!(ctx.journaled_state.database.basic_reads, 1);
+    assert_eq!(ctx.journaled_state.database.storage_reads, 2);
 }
 
 #[test]
