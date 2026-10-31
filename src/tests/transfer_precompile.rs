@@ -2,10 +2,8 @@ use crate::{
     builder::{DefaultScrollContext, ScrollCfgExt, ScrollContext},
     precompile::{
         self,
-        transfer::{
-            ADDRESS as TRANSFER_ADDRESS, GAS_COST as TRANSFER_GAS_COST,
-            NATIVE_DOGE_TOKEN_ADDRESS as ALLOWED_CALLER,
-        },
+        addresses::TRANSFER as TRANSFER_ADDRESS,
+        transfer::{GAS_COST as TRANSFER_GAS_COST, NATIVE_DOGE_TOKEN_ADDRESS as ALLOWED_CALLER},
         ScrollPrecompileProvider,
     },
     ScrollSpecId,
