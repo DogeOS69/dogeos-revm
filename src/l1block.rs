@@ -75,7 +75,9 @@ pub struct L1BlockInfo {
     pub l1_commit_scalar: Option<U256>,
     /// The current L1 blob scalar, None if before Curie.
     pub l1_blob_scalar: Option<U256>,
-    /// The current call data gas (l1_blob_scalar * l1_base_fee), None if before Curie.
+    /// The current calldata fee component (l1_commit_scalar * l1_base_fee), None if before Curie.
+    ///
+    /// Despite the name, this is priced in wei and scaled by [`TX_L1_FEE_PRECISION`], not L1 gas.
     pub calldata_gas: Option<U256>,
     /// The current compression penalty threshold, None if before Feynman.
     pub penalty_threshold: Option<U256>,
@@ -138,37 +140,42 @@ impl L1BlockInfo {
         })
     }
 
-    /// Calculate the data gas for posting the transaction on L1. Calldata costs 16 gas per non-zero
-    /// byte and 4 gas per zero byte.
-    pub fn data_gas(&self, input: &[u8], spec_id: ScrollSpecId) -> U256 {
-        if !spec_id.is_enabled_in(ScrollSpecId::CURIE) {
-            U256::from(input.iter().fold(0, |acc, byte| {
-                acc + if *byte == 0x00 { ZERO_BYTE_COST } else { NON_ZERO_BYTE_COST }
-            }))
-            .saturating_add(self.l1_fee_overhead)
-            .saturating_add(TX_L1_COMMIT_EXTRA_COST)
-        } else {
-            U256::from(input.len())
-                .saturating_mul(
-                    self.l1_blob_base_fee.expect("l1_blob_base_fee should be set in Curie"),
-                )
-                .saturating_mul(self.l1_blob_scalar.expect("l1_blob_scalar should be set in Curie"))
-        }
+    /// Returns the pre-Curie L1 gas for posting the transaction as calldata on L1. Calldata costs
+    /// 16 gas per non-zero byte and 4 gas per zero byte, plus the fee overhead and the commit
+    /// extra cost.
+    ///
+    /// The result is in L1 gas, not wei. The caller prices it with the L1 base fee.
+    fn pre_curie_l1_gas(&self, input: &[u8]) -> U256 {
+        U256::from(input.iter().fold(0, |acc, byte| {
+            acc + if *byte == 0x00 { ZERO_BYTE_COST } else { NON_ZERO_BYTE_COST }
+        }))
+        .saturating_add(self.l1_fee_overhead)
+        .saturating_add(TX_L1_COMMIT_EXTRA_COST)
     }
 
-    fn calculate_tx_l1_cost_shanghai(&self, input: &[u8], spec_id: ScrollSpecId) -> U256 {
-        let tx_l1_gas = self.data_gas(input, spec_id);
+    /// Returns the Curie blob fee component, `blobScalar * _data.length * l1BlobBaseFee`.
+    ///
+    /// The result is already priced in wei and scaled by [`TX_L1_FEE_PRECISION`], like
+    /// `calldata_gas`.
+    fn curie_blob_fee(&self, input: &[u8]) -> U256 {
+        U256::from(input.len())
+            .saturating_mul(self.l1_blob_base_fee.expect("l1_blob_base_fee should be set in Curie"))
+            .saturating_mul(self.l1_blob_scalar.expect("l1_blob_scalar should be set in Curie"))
+    }
+
+    fn calculate_tx_l1_cost_shanghai(&self, input: &[u8]) -> U256 {
+        let tx_l1_gas = self.pre_curie_l1_gas(input);
         tx_l1_gas
             .saturating_mul(self.l1_base_fee)
             .saturating_mul(self.l1_base_fee_scalar)
             .wrapping_div(TX_L1_FEE_PRECISION_U256)
     }
 
-    fn calculate_tx_l1_cost_curie(&self, input: &[u8], spec_id: ScrollSpecId) -> U256 {
+    fn calculate_tx_l1_cost_curie(&self, input: &[u8]) -> U256 {
         // "commitScalar * l1BaseFee + blobScalar * _data.length * l1BlobBaseFee"
-        let blob_gas = self.data_gas(input, spec_id);
+        let blob_fee = self.curie_blob_fee(input);
 
-        self.calldata_gas.unwrap().saturating_add(blob_gas).wrapping_div(TX_L1_FEE_PRECISION_U256)
+        self.calldata_gas.unwrap().saturating_add(blob_fee).wrapping_div(TX_L1_FEE_PRECISION_U256)
     }
 
     fn calculate_tx_l1_cost_feynman(
@@ -312,9 +319,9 @@ impl L1BlockInfo {
         compressed_size: Option<usize>,
     ) -> U256 {
         let l1_cost = if !spec_id.is_enabled_in(ScrollSpecId::CURIE) {
-            self.calculate_tx_l1_cost_shanghai(input, spec_id)
+            self.calculate_tx_l1_cost_shanghai(input)
         } else if !spec_id.is_enabled_in(ScrollSpecId::FEYNMAN) {
-            self.calculate_tx_l1_cost_curie(input, spec_id)
+            self.calculate_tx_l1_cost_curie(input)
         } else if !spec_id.is_enabled_in(ScrollSpecId::GALILEO) {
             let compression_ratio = compression_ratio.unwrap_or_else(|| {
                 panic!("compression ratio should be set in spec_id={spec_id:?}")
