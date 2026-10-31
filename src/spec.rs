@@ -118,17 +118,7 @@ mod tests {
 
     #[test]
     fn spec_names_round_trip() {
-        for spec in [
-            ScrollSpecId::SHANGHAI,
-            ScrollSpecId::BERNOULLI,
-            ScrollSpecId::CURIE,
-            ScrollSpecId::DARWIN,
-            ScrollSpecId::EUCLID,
-            ScrollSpecId::FEYNMAN,
-            ScrollSpecId::GALILEO,
-            ScrollSpecId::TSUKI,
-            ScrollSpecId::TSUKI_V2,
-        ] {
+        for spec in (0..=u8::MAX).filter_map(ScrollSpecId::try_from_u8) {
             let name: &'static str = spec.into();
             assert_eq!(name.parse::<ScrollSpecId>(), Ok(spec));
             assert_eq!(ScrollSpecId::try_from_u8(spec as u8), Some(spec));
@@ -137,7 +127,7 @@ mod tests {
 
     #[test]
     fn unknown_spec_name_is_an_error() {
-        for name in ["", "prague", "Euclid", "tsukiv2", "tsuki_v2", " tsuki"] {
+        for name in ["", name::LATEST, "prague", "Euclid", "tsukiv2", "tsuki_v2", " tsuki"] {
             assert_eq!(name.parse::<ScrollSpecId>(), Err(UnknownHardfork), "{name:?}");
         }
     }
