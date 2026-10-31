@@ -11,6 +11,7 @@ use revm::{
 };
 use std::{boxed::Box, string::String};
 
+pub mod addresses;
 mod blake2;
 mod bn254;
 mod hash;
@@ -116,16 +117,19 @@ pub(crate) fn galileo() -> &'static Precompiles {
     })
 }
 
-pub(crate) fn tsuki() -> PrecompilesMap {
+/// Returns the static precompiles for Tsuki spec, without the transfer precompile.
+pub(crate) fn tsuki_static() -> &'static Precompiles {
     static INSTANCE: OnceBox<Precompiles> = OnceBox::new();
-    let static_precompiles = INSTANCE.get_or_init(|| {
+    INSTANCE.get_or_init(|| {
         let mut precompiles = galileo().clone();
         precompiles.extend([hash::ripemd160::TSUKI]);
         Box::new(precompiles)
-    });
+    })
+}
 
-    PrecompilesMap::from_static(static_precompiles)
-        .with_extended_precompiles([(transfer::ADDRESS, transfer::precompile().clone())])
+pub(crate) fn tsuki() -> PrecompilesMap {
+    PrecompilesMap::from_static(tsuki_static())
+        .with_extended_precompiles([(addresses::TRANSFER, transfer::precompile().clone())])
 }
 
 impl<BlockEnv, TxEnv, CfgEnv, DB, Chain>
@@ -175,10 +179,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        builder::{DefaultScrollContext, ScrollCfgExt},
-        precompile::bn254::pair,
-    };
+    use crate::builder::{DefaultScrollContext, ScrollCfgExt};
     use alloy_evm::{
         precompiles::{Precompile, PrecompileInput},
         EvmInternals,
@@ -186,7 +187,7 @@ mod tests {
     use revm::{
         context::{Cfg, CfgEnv},
         context_interface::cfg::gas,
-        precompile::{u64_to_address, PrecompileError, PrecompileId, PrecompileResult},
+        precompile::{PrecompileError, PrecompileId, PrecompileResult},
         primitives::{hex, U256},
         Context,
     };
@@ -218,49 +219,104 @@ mod tests {
         ScrollPrecompileProvider::new_with_spec(spec).into_precompiles_map()
     }
 
+    const ALL_SPECS: [ScrollSpecId; 9] = [
+        ScrollSpecId::SHANGHAI,
+        ScrollSpecId::BERNOULLI,
+        ScrollSpecId::CURIE,
+        ScrollSpecId::DARWIN,
+        ScrollSpecId::EUCLID,
+        ScrollSpecId::FEYNMAN,
+        ScrollSpecId::GALILEO,
+        ScrollSpecId::TSUKI,
+        ScrollSpecId::TSUKI_V2,
+    ];
+
+    const ALL_ADDRESSES: [Address; 11] = [
+        addresses::ECRECOVER,
+        addresses::SHA256,
+        addresses::RIPEMD160,
+        addresses::IDENTITY,
+        addresses::MODEXP,
+        addresses::BN254_ADD,
+        addresses::BN254_MUL,
+        addresses::BN254_PAIRING,
+        addresses::BLAKE2F,
+        addresses::P256VERIFY,
+        addresses::TRANSFER,
+    ];
+
+    /// The static precompile set of `spec`, i.e. the set before any dynamic precompile is added.
+    fn static_precompiles_for_spec(spec: ScrollSpecId) -> &'static Precompiles {
+        match spec {
+            ScrollSpecId::SHANGHAI => pre_bernoulli(),
+            ScrollSpecId::BERNOULLI | ScrollSpecId::CURIE | ScrollSpecId::DARWIN => bernoulli(),
+            ScrollSpecId::EUCLID => euclid(),
+            ScrollSpecId::FEYNMAN => feynman(),
+            ScrollSpecId::GALILEO => galileo(),
+            ScrollSpecId::TSUKI | ScrollSpecId::TSUKI_V2 => tsuki_static(),
+        }
+    }
+
+    /// The dynamic precompiles that `spec` adds on top of its static set.
+    fn extended_precompile_addresses(spec: ScrollSpecId) -> Vec<Address> {
+        if spec >= ScrollSpecId::TSUKI {
+            vec![addresses::TRANSFER]
+        } else {
+            vec![]
+        }
+    }
+
     fn expected_precompile_addresses(spec: ScrollSpecId) -> Vec<Address> {
-        let mut addresses = (1..=9).map(u64_to_address).collect::<Vec<_>>();
+        let mut expected = vec![
+            addresses::ECRECOVER,
+            addresses::SHA256,
+            addresses::RIPEMD160,
+            addresses::IDENTITY,
+            addresses::MODEXP,
+            addresses::BN254_ADD,
+            addresses::BN254_MUL,
+            addresses::BN254_PAIRING,
+            addresses::BLAKE2F,
+        ];
 
         if spec >= ScrollSpecId::EUCLID {
-            addresses.push(u64_to_address(256));
+            expected.push(addresses::P256VERIFY);
         }
-        if spec >= ScrollSpecId::TSUKI {
-            addresses.push(transfer::ADDRESS);
-        }
+        expected.extend(extended_precompile_addresses(spec));
 
-        addresses
+        expected
     }
 
     fn expected_precompile_id(address: Address) -> PrecompileId {
         match address {
-            _ if address == u64_to_address(1) => PrecompileId::EcRec,
-            _ if address == hash::sha256::ADDRESS => PrecompileId::Sha256,
-            _ if address == hash::ripemd160::ADDRESS => PrecompileId::Ripemd160,
-            _ if address == u64_to_address(4) => PrecompileId::Identity,
-            _ if address == modexp::ADDRESS => PrecompileId::ModExp,
-            _ if address == u64_to_address(6) => PrecompileId::Bn254Add,
-            _ if address == u64_to_address(7) => PrecompileId::Bn254Mul,
-            _ if address == pair::ADDRESS => PrecompileId::Bn254Pairing,
-            _ if address == blake2::ADDRESS => PrecompileId::Blake2F,
-            _ if address == u64_to_address(256) => PrecompileId::P256Verify,
-            _ if address == transfer::ADDRESS => transfer::ID.clone(),
+            _ if address == addresses::ECRECOVER => PrecompileId::EcRec,
+            _ if address == addresses::SHA256 => PrecompileId::Sha256,
+            _ if address == addresses::RIPEMD160 => PrecompileId::Ripemd160,
+            _ if address == addresses::IDENTITY => PrecompileId::Identity,
+            _ if address == addresses::MODEXP => PrecompileId::ModExp,
+            _ if address == addresses::BN254_ADD => PrecompileId::Bn254Add,
+            _ if address == addresses::BN254_MUL => PrecompileId::Bn254Mul,
+            _ if address == addresses::BN254_PAIRING => PrecompileId::Bn254Pairing,
+            _ if address == addresses::BLAKE2F => PrecompileId::Blake2F,
+            _ if address == addresses::P256VERIFY => PrecompileId::P256Verify,
+            _ if address == addresses::TRANSFER => addresses::TRANSFER_ID,
             _ => panic!("unexpected precompile address: {address}"),
         }
     }
 
     fn expected_zero_input_gas(spec: ScrollSpecId, address: Address) -> Option<u64> {
         match address {
-            _ if address == u64_to_address(1) => Some(3_000),
-            _ if address == hash::sha256::ADDRESS && spec >= ScrollSpecId::BERNOULLI => Some(60),
-            _ if address == hash::ripemd160::ADDRESS && spec >= ScrollSpecId::TSUKI => Some(600),
-            _ if address == u64_to_address(4) => Some(15),
-            _ if address == modexp::ADDRESS && spec >= ScrollSpecId::GALILEO => Some(500),
-            _ if address == modexp::ADDRESS => Some(200),
-            _ if address == u64_to_address(6) => Some(150),
-            _ if address == u64_to_address(7) => Some(6_000),
-            _ if address == pair::ADDRESS => Some(45_000),
-            _ if address == u64_to_address(256) && spec >= ScrollSpecId::GALILEO => Some(6_900),
-            _ if address == u64_to_address(256) => Some(3_450),
+            _ if address == addresses::ECRECOVER => Some(3_000),
+            _ if address == addresses::SHA256 && spec >= ScrollSpecId::BERNOULLI => Some(60),
+            _ if address == addresses::RIPEMD160 && spec >= ScrollSpecId::TSUKI => Some(600),
+            _ if address == addresses::IDENTITY => Some(15),
+            _ if address == addresses::MODEXP && spec >= ScrollSpecId::GALILEO => Some(500),
+            _ if address == addresses::MODEXP => Some(200),
+            _ if address == addresses::BN254_ADD => Some(150),
+            _ if address == addresses::BN254_MUL => Some(6_000),
+            _ if address == addresses::BN254_PAIRING => Some(45_000),
+            _ if address == addresses::P256VERIFY && spec >= ScrollSpecId::GALILEO => Some(6_900),
+            _ if address == addresses::P256VERIFY => Some(3_450),
             _ => None,
         }
     }
@@ -268,11 +324,11 @@ mod tests {
     fn expected_not_implemented(spec: ScrollSpecId, address: Address) -> bool {
         matches!(
             address,
-            _ if address == hash::sha256::ADDRESS && spec < ScrollSpecId::BERNOULLI
+            _ if address == addresses::SHA256 && spec < ScrollSpecId::BERNOULLI
         ) || matches!(
             address,
-            _ if address == hash::ripemd160::ADDRESS && spec < ScrollSpecId::TSUKI
-        ) || address == blake2::ADDRESS
+            _ if address == addresses::RIPEMD160 && spec < ScrollSpecId::TSUKI
+        ) || address == addresses::BLAKE2F
     }
 
     fn assert_precompile_zero_input_gas(
@@ -316,18 +372,46 @@ mod tests {
     }
 
     #[test]
+    fn precompile_addresses_are_distinct() {
+        for (i, address) in ALL_ADDRESSES.iter().enumerate() {
+            assert!(!ALL_ADDRESSES[i + 1..].contains(address), "duplicate address {address}");
+        }
+    }
+
+    #[test]
+    fn active_precompile_sets_have_no_duplicate_addresses() {
+        for spec in ALL_SPECS {
+            let static_precompiles = static_precompiles_for_spec(spec);
+            let extended = extended_precompile_addresses(spec);
+            let active = precompiles_for_spec(spec);
+
+            // A dynamic precompile replaces any static precompile at the same address.
+            for address in &extended {
+                assert!(
+                    !static_precompiles.contains(address),
+                    "{spec:?} dynamic precompile at {address} shadows a static precompile"
+                );
+            }
+            assert_eq!(
+                active.addresses().count(),
+                static_precompiles.len() + extended.len(),
+                "{spec:?} active precompile count"
+            );
+
+            let active_addresses = active.addresses().copied().collect::<Vec<_>>();
+            let mut ids = Vec::new();
+            for address in &active_addresses {
+                assert!(ALL_ADDRESSES.contains(address), "{spec:?} unknown address {address}");
+                let id = active.get(address).unwrap().precompile_id().clone();
+                assert!(!ids.contains(&id), "{spec:?} precompile {id:?} installed twice");
+                ids.push(id);
+            }
+        }
+    }
+
+    #[test]
     fn spec_activation_matrix_matches_scroll_plan() {
-        for spec in [
-            ScrollSpecId::SHANGHAI,
-            ScrollSpecId::BERNOULLI,
-            ScrollSpecId::CURIE,
-            ScrollSpecId::DARWIN,
-            ScrollSpecId::EUCLID,
-            ScrollSpecId::FEYNMAN,
-            ScrollSpecId::GALILEO,
-            ScrollSpecId::TSUKI,
-            ScrollSpecId::TSUKI_V2,
-        ] {
+        for spec in ALL_SPECS {
             let cfg = CfgEnv::new_scroll(spec);
 
             let expected_eip7702 = spec >= ScrollSpecId::EUCLID;
@@ -387,13 +471,13 @@ mod tests {
 
             if spec >= ScrollSpecId::TSUKI {
                 let precompile = precompiles
-                    .get(&transfer::ADDRESS)
+                    .get(&addresses::TRANSFER)
                     .expect("transfer precompile should be installed in TSUKI");
                 let input = vec![0; 96];
                 let output = call_dyn_precompile(
                     precompile,
                     transfer::NATIVE_DOGE_TOKEN_ADDRESS,
-                    transfer::ADDRESS,
+                    addresses::TRANSFER,
                     &input,
                     transfer::GAS_COST,
                 )
@@ -401,12 +485,12 @@ mod tests {
                 assert_eq!(output.gas_used, transfer::GAS_COST);
 
                 let precompile = precompiles
-                    .get(&transfer::ADDRESS)
+                    .get(&addresses::TRANSFER)
                     .expect("transfer precompile should be installed in TSUKI");
                 let err = call_dyn_precompile(
                     precompile,
                     transfer::NATIVE_DOGE_TOKEN_ADDRESS,
-                    transfer::ADDRESS,
+                    addresses::TRANSFER,
                     &input,
                     transfer::GAS_COST - 1,
                 )
@@ -449,7 +533,7 @@ mod tests {
                 .unwrap();
 
         let precompile =
-            galileo().get(&hash::ripemd160::ADDRESS).expect("precompile exists before TSUKI");
+            galileo().get(&addresses::RIPEMD160).expect("precompile exists before TSUKI");
         let outcome = precompile.execute(&input, u64::MAX);
         assert!(matches!(
             outcome,
@@ -458,15 +542,10 @@ mod tests {
 
         let precompiles = tsuki();
         let precompile =
-            precompiles.get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
-        let outcome = call_dyn_precompile(
-            precompile,
-            Address::ZERO,
-            hash::ripemd160::ADDRESS,
-            &input,
-            u64::MAX,
-        )
-        .expect("call succeeds");
+            precompiles.get(&addresses::RIPEMD160).expect("precompile exists in TSUKI");
+        let outcome =
+            call_dyn_precompile(precompile, Address::ZERO, addresses::RIPEMD160, &input, u64::MAX)
+                .expect("call succeeds");
         assert_eq!(outcome.bytes.as_ref(), expected.as_slice());
     }
 
@@ -475,15 +554,10 @@ mod tests {
         let input = vec![0xff; hash::ripemd160::TSUKI_LEN_LIMIT];
         let precompiles = tsuki();
         let precompile =
-            precompiles.get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
+            precompiles.get(&addresses::RIPEMD160).expect("precompile exists in TSUKI");
 
-        let outcome = call_dyn_precompile(
-            precompile,
-            Address::ZERO,
-            hash::ripemd160::ADDRESS,
-            &input,
-            u64::MAX,
-        );
+        let outcome =
+            call_dyn_precompile(precompile, Address::ZERO, addresses::RIPEMD160, &input, u64::MAX);
 
         assert!(outcome.is_ok(), "32-byte input should be accepted");
     }
@@ -493,15 +567,10 @@ mod tests {
         let input = vec![0xff; hash::ripemd160::TSUKI_LEN_LIMIT + 1];
         let precompiles = tsuki();
         let precompile =
-            precompiles.get(&hash::ripemd160::ADDRESS).expect("precompile exists in TSUKI");
+            precompiles.get(&addresses::RIPEMD160).expect("precompile exists in TSUKI");
 
-        let outcome = call_dyn_precompile(
-            precompile,
-            Address::ZERO,
-            hash::ripemd160::ADDRESS,
-            &input,
-            u64::MAX,
-        );
+        let outcome =
+            call_dyn_precompile(precompile, Address::ZERO, addresses::RIPEMD160, &input, u64::MAX);
 
         assert!(matches!(
             outcome,
@@ -519,12 +588,12 @@ mod tests {
                 .unwrap();
 
         // Euclid version should reject this input
-        let precompile = euclid().get(&pair::ADDRESS).expect("precompile exists");
+        let precompile = euclid().get(&addresses::BN254_PAIRING).expect("precompile exists");
         let outcome = precompile.execute(&input, u64::MAX);
         assert!(outcome.is_err());
 
         // Feynman version should accept this input
-        let precompile = feynman().get(&pair::ADDRESS).expect("precompile exists");
+        let precompile = feynman().get(&addresses::BN254_PAIRING).expect("precompile exists");
         let outcome = precompile.execute(&input, u64::MAX).expect("call succeeds");
         assert_eq!(outcome.bytes, expected);
     }

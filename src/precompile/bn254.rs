@@ -6,7 +6,8 @@ use revm::precompile::{
 pub mod pair {
     use super::*;
 
-    pub use bn254::pair::{ADDRESS, ISTANBUL_PAIR_BASE, ISTANBUL_PAIR_PER_POINT};
+    use crate::precompile::addresses;
+    pub use bn254::pair::{ISTANBUL_PAIR_BASE, ISTANBUL_PAIR_PER_POINT};
     use revm::precompile::{Precompile, PrecompileId};
 
     /// The number of pairing inputs per pairing operation. If the inputs provided to the precompile
@@ -16,7 +17,7 @@ pub mod pair {
 
     /// The Bn254 pair precompile with BERNOULLI input rules.
     pub const BERNOULLI: Precompile =
-        Precompile::new(PrecompileId::Bn254Pairing, ADDRESS, bernoulli_run);
+        Precompile::new(PrecompileId::Bn254Pairing, addresses::BN254_PAIRING, bernoulli_run);
 
     /// The bernoulli Bn254 pair precompile implementation.
     ///

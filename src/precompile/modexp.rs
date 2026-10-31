@@ -1,25 +1,24 @@
+use super::addresses;
 use revm::{
     precompile::{
         modexp,
         modexp::{berlin_gas_calc, run_inner},
-        u64_to_address,
         utilities::right_pad_with_offset,
         Precompile, PrecompileError, PrecompileId, PrecompileResult,
     },
-    primitives::{Address, U256},
+    primitives::U256,
 };
-
-/// The MODEXP precompile address.
-pub const ADDRESS: Address = u64_to_address(5);
 
 /// The maximum length of the input for the MODEXP precompile in BERNOULLI hardfork.
 pub const BERNOULLI_LEN_LIMIT: U256 = U256::from_limbs([32, 0, 0, 0]);
 
 /// The MODEXP precompile with BERNOULLI length limit rule.
-pub const BERNOULLI: Precompile = Precompile::new(PrecompileId::ModExp, ADDRESS, bernoulli_run);
+pub const BERNOULLI: Precompile =
+    Precompile::new(PrecompileId::ModExp, addresses::MODEXP, bernoulli_run);
 
 /// The Galileo MODEXP precompile.
-pub const GALILEO: Precompile = Precompile::new(PrecompileId::ModExp, ADDRESS, modexp::osaka_run);
+pub const GALILEO: Precompile =
+    Precompile::new(PrecompileId::ModExp, addresses::MODEXP, modexp::osaka_run);
 
 /// The bernoulli MODEXP precompile implementation.
 ///
