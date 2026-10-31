@@ -1,5 +1,8 @@
 use crate::ScrollSpecId;
-use alloy_evm::{precompiles::PrecompilesMap, Database};
+use alloy_evm::{
+    precompiles::{DynPrecompile, PrecompilesMap},
+    Database,
+};
 use once_cell::race::OnceBox;
 use revm::{
     context::Cfg,
@@ -117,7 +120,7 @@ pub(crate) fn galileo() -> &'static Precompiles {
     })
 }
 
-/// Returns the static precompiles for Tsuki spec, without the transfer precompile.
+/// Returns the static precompiles for the Tsuki and TsukiV2 specs, without [`tsuki_extensions`].
 pub(crate) fn tsuki_static() -> &'static Precompiles {
     static INSTANCE: OnceBox<Precompiles> = OnceBox::new();
     INSTANCE.get_or_init(|| {
@@ -127,9 +130,14 @@ pub(crate) fn tsuki_static() -> &'static Precompiles {
     })
 }
 
+/// Returns the dynamic precompiles that the Tsuki and TsukiV2 specs add on top of
+/// [`tsuki_static`].
+pub(crate) fn tsuki_extensions() -> [(Address, DynPrecompile); 1] {
+    [(addresses::TRANSFER, transfer::precompile().clone())]
+}
+
 pub(crate) fn tsuki() -> PrecompilesMap {
-    PrecompilesMap::from_static(tsuki_static())
-        .with_extended_precompiles([(addresses::TRANSFER, transfer::precompile().clone())])
+    PrecompilesMap::from_static(tsuki_static()).with_extended_precompiles(tsuki_extensions())
 }
 
 impl<BlockEnv, TxEnv, CfgEnv, DB, Chain>
@@ -257,10 +265,10 @@ mod tests {
         }
     }
 
-    /// The dynamic precompiles that `spec` adds on top of its static set.
-    fn extended_precompile_addresses(spec: ScrollSpecId) -> Vec<Address> {
+    /// The addresses of the dynamic precompiles that `spec` adds on top of its static set.
+    fn extension_addresses(spec: ScrollSpecId) -> Vec<Address> {
         if spec >= ScrollSpecId::TSUKI {
-            vec![addresses::TRANSFER]
+            tsuki_extensions().iter().map(|(address, _)| *address).collect()
         } else {
             vec![]
         }
@@ -282,7 +290,9 @@ mod tests {
         if spec >= ScrollSpecId::EUCLID {
             expected.push(addresses::P256VERIFY);
         }
-        expected.extend(extended_precompile_addresses(spec));
+        if spec >= ScrollSpecId::TSUKI {
+            expected.push(addresses::TRANSFER);
+        }
 
         expected
     }
@@ -379,28 +389,45 @@ mod tests {
     }
 
     #[test]
-    fn active_precompile_sets_have_no_duplicate_addresses() {
+    fn dynamic_precompiles_do_not_shadow_static_ones() {
         for spec in ALL_SPECS {
             let static_precompiles = static_precompiles_for_spec(spec);
-            let extended = extended_precompile_addresses(spec);
+            let mut extensions = extension_addresses(spec);
             let active = precompiles_for_spec(spec);
 
-            // A dynamic precompile replaces any static precompile at the same address.
-            for address in &extended {
+            // `with_extended_precompiles` silently replaces a static precompile at the same
+            // address, so require that no extension collides with the static set.
+            for address in &extensions {
                 assert!(
                     !static_precompiles.contains(address),
                     "{spec:?} dynamic precompile at {address} shadows a static precompile"
                 );
             }
-            assert_eq!(
-                active.addresses().count(),
-                static_precompiles.len() + extended.len(),
-                "{spec:?} active precompile count"
-            );
 
-            let active_addresses = active.addresses().copied().collect::<Vec<_>>();
+            // Every static precompile is still installed, with its own ID.
+            for address in static_precompiles.addresses() {
+                let installed = active
+                    .get(address)
+                    .unwrap_or_else(|| panic!("{spec:?} static precompile {address} missing"));
+                assert_eq!(
+                    installed.precompile_id(),
+                    static_precompiles.get(address).unwrap().id(),
+                    "{spec:?} static precompile {address} replaced"
+                );
+            }
+
+            // The active set is exactly the static set plus the extensions.
+            let mut added = active
+                .addresses()
+                .filter(|address| !static_precompiles.contains(address))
+                .copied()
+                .collect::<Vec<_>>();
+            added.sort_unstable();
+            extensions.sort_unstable();
+            assert_eq!(added, extensions, "{spec:?} dynamic precompiles");
+
             let mut ids = Vec::new();
-            for address in &active_addresses {
+            for address in active.addresses() {
                 assert!(ALL_ADDRESSES.contains(address), "{spec:?} unknown address {address}");
                 let id = active.get(address).unwrap().precompile_id().clone();
                 assert!(!ids.contains(&id), "{spec:?} precompile {id:?} installed twice");

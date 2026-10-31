@@ -1,7 +1,8 @@
-//! Addresses and IDs of the precompiles installed by the Scroll specs.
+//! Addresses of the precompiles installed by the Scroll specs, and the IDs of the custom ones.
 //!
 //! Every precompile address used by this crate is defined here. Precompiles taken unchanged from
-//! revm carry revm's own address; the tests check that it matches the constant below.
+//! revm carry revm's own address; `spec_activation_matrix_matches_scroll_plan` checks that it
+//! matches the constant below.
 
 use revm::precompile::{u64_to_address, PrecompileId};
 use revm_primitives::Address;
@@ -39,7 +40,8 @@ pub const P256VERIFY: Address = u64_to_address(256);
 
 /// The Transfer precompile address.
 ///
-/// The native DOGE token contract also hardcodes this address.
+/// The native DOGE token contract also hardcodes this address, so changing it breaks the deployed
+/// contract.
 pub const TRANSFER: Address = u64_to_address(0xff - 2);
 
 /// The Transfer precompile id.
