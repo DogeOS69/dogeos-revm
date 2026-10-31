@@ -61,8 +61,7 @@ fn run(mut input: PrecompileInput<'_>) -> PrecompileResult {
     let to = Address::from_slice(&input.data()[44..64]);
     let value = U256::from_be_slice(&input.data()[64..96]);
 
-    // Reject a receiver overflow before transferring. revm debits the sender before it checks the
-    // credit and does not restore the debit, so an overflowing transfer would burn the value.
+    // The receiver's balance must not overflow; check it before moving any value.
     if from != to {
         match input.internals_mut().load_account(to) {
             Ok(account) if account.info.balance.checked_add(value).is_none() => {
