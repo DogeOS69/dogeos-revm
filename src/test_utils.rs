@@ -4,6 +4,7 @@ use crate::{
     ScrollSpecId,
 };
 use revm::{
+    context::CfgEnv,
     database::{DbAccount, InMemoryDB},
     state::AccountInfo,
     Context,
@@ -30,10 +31,11 @@ pub fn long_calldata() -> Bytes {
     bytes!("0x000000000123456789abcdef00000000123456789abcdef00000000123456789abcdef")
 }
 
-/// Returns a test [`ScrollContext`] which contains a basic transaction, a default block beneficiary
-/// and a state with L1 gas oracle slots set.
+/// Returns a test [`ScrollContext`] for Euclid which contains a basic transaction, a default block
+/// beneficiary and a state with L1 gas oracle slots set.
 pub fn context() -> ScrollContext<InMemoryDB> {
     Context::scroll()
+        .with_cfg(CfgEnv::new_scroll(ScrollSpecId::EUCLID))
         .modify_tx_chained(|tx| {
             tx.base.caller = CALLER;
             tx.base.kind = Some(TO).into();
