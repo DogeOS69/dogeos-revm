@@ -61,6 +61,23 @@ fn run(mut input: PrecompileInput<'_>) -> PrecompileResult {
     let to = Address::from_slice(&input.data()[44..64]);
     let value = U256::from_be_slice(&input.data()[64..96]);
 
+    // Reject a receiver overflow before transferring. revm debits the sender before it checks the
+    // credit and does not restore the debit, so an overflowing transfer would burn the value.
+    if from != to {
+        match input.internals_mut().load_account(to) {
+            Ok(account) if account.info.balance.checked_add(value).is_none() => {
+                return Ok(PrecompileOutput::new_reverted(GAS_COST, Default::default()));
+            }
+            Ok(_) => {}
+            Err(db_error) => {
+                return Err(PrecompileError::Fatal(format!(
+                    "transfer failed due to database error: {:?}",
+                    db_error
+                )));
+            }
+        }
+    }
+
     match input.internals_mut().transfer(from, to, value) {
         Ok(None) => Ok(PrecompileOutput::new(GAS_COST, Default::default())),
         Ok(Some(_transfer_error)) => {

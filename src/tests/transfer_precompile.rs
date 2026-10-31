@@ -489,6 +489,33 @@ fn overflow_payment_returns_reverted_result() -> Result<(), Box<dyn core::error:
 }
 
 #[test]
+fn overflow_payment_keeps_both_balances() -> Result<(), Box<dyn core::error::Error>> {
+    let mut ctx = context(U256::from(10), U256::MAX - U256::from(2));
+    let input = transfer_input(FROM, TO, U256::from(3));
+
+    let output = call_transfer_precompile(&mut ctx, TransferCall::new(&input))?;
+
+    assert!(output.reverted);
+    assert_eq!(output.gas_used, TRANSFER_GAS_COST);
+    assert_eq!(balance(&mut ctx, FROM)?, U256::from(10));
+    assert_eq!(balance(&mut ctx, TO)?, U256::MAX - U256::from(2));
+    Ok(())
+}
+
+#[test]
+fn transfer_up_to_max_receiver_balance_succeeds() -> Result<(), Box<dyn core::error::Error>> {
+    let mut ctx = context(U256::from(10), U256::MAX - U256::from(3));
+    let input = transfer_input(FROM, TO, U256::from(3));
+
+    let output = call_transfer_precompile(&mut ctx, TransferCall::new(&input))?;
+
+    assert!(!output.reverted);
+    assert_eq!(balance(&mut ctx, FROM)?, U256::from(7));
+    assert_eq!(balance(&mut ctx, TO)?, U256::MAX);
+    Ok(())
+}
+
+#[test]
 fn zero_value_transfer() -> Result<(), Box<dyn core::error::Error>> {
     let mut ctx = context(U256::from(10), U256::from(3));
     let input = transfer_input(FROM, TO, U256::ZERO);
