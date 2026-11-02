@@ -23,7 +23,7 @@ use revm::{
     },
     primitives::{hardfork::SpecId, U256},
 };
-use std::{boxed::Box, string::ToString};
+use std::{boxed::Box, format, string::ToString};
 
 /// The Scroll handler.
 pub struct ScrollHandler<EVM, ERROR, FRAME> {
@@ -516,18 +516,7 @@ where
 
         // calculate the L1 cost of the transaction.
         let l1_cost = if !ctx.tx().is_system_tx() {
-            let l1_block_info = ctx.chain().l1_block_info.clone();
-            let Some(rlp_bytes) = &ctx.tx().rlp_bytes() else {
-                return Err(ERROR::from_string(
-                    "[SCROLL] Failed to load transaction rlp_bytes.".to_string(),
-                ));
-            };
-            l1_block_info.calculate_tx_l1_cost(
-                rlp_bytes,
-                ctx.cfg().spec(),
-                ctx.tx().compression_ratio(),
-                ctx.tx().compressed_size(),
-            )
+            tx_l1_cost::<_, ERROR>(ctx, ctx.cfg().spec())?
         } else {
             U256::from(0)
         };
@@ -583,12 +572,15 @@ fn tx_l1_cost<CTX: ScrollContextTr, ERROR: FromStringError>(
         ));
     };
 
-    Ok(ctx.chain().l1_block_info.calculate_tx_l1_cost(
-        rlp_bytes,
-        spec,
-        ctx.tx().compression_ratio(),
-        ctx.tx().compressed_size(),
-    ))
+    ctx.chain()
+        .l1_block_info
+        .try_calculate_tx_l1_cost(
+            rlp_bytes,
+            spec,
+            ctx.tx().compression_ratio(),
+            ctx.tx().compressed_size(),
+        )
+        .map_err(|err| ERROR::from_string(format!("[SCROLL] Failed to calculate L1 fee: {err}")))
 }
 
 // Mirrors revm v103 `crates/handler/src/validation.rs::validate_priority_fee_for_tx`.
