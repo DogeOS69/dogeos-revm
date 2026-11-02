@@ -30,7 +30,7 @@ impl ScrollSpecId {
         Self::enabled(self, other)
     }
 
-    /// Returns `true` if the provided specification ID is enabled in the other spec.
+    /// Returns `true` if `other` is active under `our`, i.e. `our >= other`.
     #[inline]
     pub const fn enabled(our: Self, other: Self) -> bool {
         our as u8 >= other as u8
