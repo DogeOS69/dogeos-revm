@@ -46,8 +46,9 @@ impl<EVM, ERROR, FRAME> Default for ScrollHandler<EVM, ERROR, FRAME> {
 ///
 /// The trait modifies the following handlers:
 /// - `validate_env` - Copies the mainnet environment/transaction validation for the mapped Ethereum
-///   spec, with Scroll-specific handling for L1 messages (EIP-7825 cap exemption) and the Euclid
-///   EIP-7702 activation boundary.
+///   spec, with Scroll-specific handling for L1 messages (EIP-7825 cap exemption), the Euclid
+///   EIP-7702 activation boundary, and rejection of custom transaction types other than L1
+///   messages.
 /// - `validate_initial_tx_gas` - Computes intrinsic and floor gas from the configured Scroll gas
 ///   parameters instead of deriving them from the mapped Ethereum spec, with Feynman's EIP-7623
 ///   activation boundary.
@@ -187,7 +188,12 @@ where
                 }
             }
             TransactionType::Custom => {
-                // Custom transaction type check is not done here.
+                // SCROLL DIVERGENCE: the L1 message is the only supported custom transaction type.
+                if !tx.is_l1_msg() {
+                    return Err(
+                        InvalidTransaction::Str("unsupported transaction type".into()).into()
+                    );
+                }
             }
         };
 
