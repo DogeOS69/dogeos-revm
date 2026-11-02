@@ -1,4 +1,6 @@
+use core::str::FromStr;
 use revm_primitives::hardfork::SpecId;
+pub use revm_primitives::hardfork::UnknownHardfork;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, enumn::N)]
@@ -9,11 +11,13 @@ pub enum ScrollSpecId {
     BERNOULLI = 2,
     CURIE = 3,
     DARWIN = 4,
-    #[default]
     EUCLID = 5,
     FEYNMAN = 6,
     GALILEO = 7,
     TSUKI = 8,
+    /// The default is the latest spec. Execution must select the spec from fork activation
+    /// instead of relying on the default.
+    #[default]
     TSUKI_V2 = 9,
 }
 
@@ -73,19 +77,21 @@ pub mod name {
     pub const TSUKI_V2: &str = "tsukiV2";
 }
 
-impl From<&str> for ScrollSpecId {
-    fn from(name: &str) -> Self {
+impl FromStr for ScrollSpecId {
+    type Err = UnknownHardfork;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
         match name {
-            name::SHANGHAI => Self::SHANGHAI,
-            name::BERNOULLI => Self::BERNOULLI,
-            name::CURIE => Self::CURIE,
-            name::DARWIN => Self::DARWIN,
-            name::EUCLID => Self::EUCLID,
-            name::FEYNMAN => Self::FEYNMAN,
-            name::GALILEO => Self::GALILEO,
-            name::TSUKI => Self::TSUKI,
-            name::TSUKI_V2 => Self::TSUKI_V2,
-            _ => Self::default(),
+            name::SHANGHAI => Ok(Self::SHANGHAI),
+            name::BERNOULLI => Ok(Self::BERNOULLI),
+            name::CURIE => Ok(Self::CURIE),
+            name::DARWIN => Ok(Self::DARWIN),
+            name::EUCLID => Ok(Self::EUCLID),
+            name::FEYNMAN => Ok(Self::FEYNMAN),
+            name::GALILEO => Ok(Self::GALILEO),
+            name::TSUKI => Ok(Self::TSUKI),
+            name::TSUKI_V2 => Ok(Self::TSUKI_V2),
+            _ => Err(UnknownHardfork),
         }
     }
 }
@@ -112,21 +118,24 @@ mod tests {
 
     #[test]
     fn spec_names_round_trip() {
-        for spec in [
-            ScrollSpecId::SHANGHAI,
-            ScrollSpecId::BERNOULLI,
-            ScrollSpecId::CURIE,
-            ScrollSpecId::DARWIN,
-            ScrollSpecId::EUCLID,
-            ScrollSpecId::FEYNMAN,
-            ScrollSpecId::GALILEO,
-            ScrollSpecId::TSUKI,
-            ScrollSpecId::TSUKI_V2,
-        ] {
+        for spec in (0..=u8::MAX).filter_map(ScrollSpecId::try_from_u8) {
             let name: &'static str = spec.into();
-            assert_eq!(ScrollSpecId::from(name), spec);
+            assert_eq!(name.parse::<ScrollSpecId>(), Ok(spec));
             assert_eq!(ScrollSpecId::try_from_u8(spec as u8), Some(spec));
         }
+    }
+
+    #[test]
+    fn unknown_spec_name_is_an_error() {
+        for name in ["", name::LATEST, "prague", "Euclid", "tsukiv2", "tsuki_v2", " tsuki"] {
+            assert_eq!(name.parse::<ScrollSpecId>(), Err(UnknownHardfork), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn default_is_latest_spec() {
+        assert_eq!(ScrollSpecId::default(), ScrollSpecId::TSUKI_V2);
+        assert_eq!(ScrollSpecId::try_from_u8(ScrollSpecId::default() as u8 + 1), None);
     }
 
     #[test]
