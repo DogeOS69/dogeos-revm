@@ -61,6 +61,8 @@ impl<EVM, ERROR, FRAME> Default for ScrollHandler<EVM, ERROR, FRAME> {
 /// - `eip7623_check_gas_floor` - Skips the EIP-7623 floor gas charge in the case the transaction is
 ///   a L1 message.
 /// - `refund` - Overrides the logic for gas refund in the case the transaction is a L1 message.
+/// - `reimburse_caller` - Skips returning unused gas to the caller in the case the transaction is a
+///   L1 message, as its gas is not charged upfront.
 /// - `post_execution.reward_beneficiary` - Overrides the logic to reward the beneficiary with the
 ///   gas fee and skip rewarding in case the transaction is a L1 message.
 /// - `execution_result` - Zeroes the EIP-7623 floor gas on the returned [`ResultGas`] in the case
@@ -471,6 +473,19 @@ where
         }
         let spec = evm.ctx().cfg().spec().into();
         post_execution::refund(spec, exec_result.gas_mut(), eip7702_refund)
+    }
+
+    #[inline]
+    fn reimburse_caller(
+        &self,
+        evm: &mut Self::Evm,
+        exec_result: &mut <<Self::Evm as EvmTr>::Frame as FrameTr>::FrameResult,
+    ) -> Result<(), Self::Error> {
+        // L1 messages are not charged for gas upfront, so there is no unused gas to return.
+        if evm.ctx().tx().is_l1_msg() {
+            return Ok(());
+        }
+        self.mainnet.reimburse_caller(evm, exec_result)
     }
 
     fn reward_beneficiary(

@@ -113,6 +113,26 @@ fn test_l1_message_should_not_refund() -> Result<(), Box<dyn core::error::Error>
 }
 
 #[test]
+fn test_l1_message_should_not_reimburse_caller() -> Result<(), Box<dyn core::error::Error>> {
+    // A non-zero gas price on an L1 message must not turn its unused gas into caller balance.
+    let ctx = context().modify_tx_chained(|tx| {
+        tx.base.tx_type = L1_MESSAGE_TYPE;
+        tx.base.gas_price = 1;
+        tx.base.gas_limit = 100_000;
+    });
+    let tx = ctx.tx.clone();
+    let mut evm = ctx.build_scroll();
+
+    let ResultAndState { result, state } = evm.transact(tx)?;
+
+    assert!(result.is_success());
+    assert_eq!(result.gas_used(), MIN_TRANSACTION_COST.to::<u64>());
+    assert_eq!(state[&CALLER].info.balance, U256::ZERO);
+
+    Ok(())
+}
+
+#[test]
 fn test_l1_message_should_not_reward_beneficiary() -> Result<(), Box<dyn core::error::Error>> {
     let ctx = context().modify_tx_chained(|tx| tx.base.tx_type = L1_MESSAGE_TYPE);
 
