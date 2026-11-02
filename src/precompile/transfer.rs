@@ -1,20 +1,13 @@
+use super::addresses;
 use alloy_evm::precompiles::{DynPrecompile, PrecompileInput};
 use once_cell::race::OnceBox;
-use revm::precompile::{
-    u64_to_address, PrecompileError, PrecompileId, PrecompileOutput, PrecompileResult,
-};
+use revm::precompile::{PrecompileError, PrecompileOutput, PrecompileResult};
 use revm_primitives::{address, Address, U256};
-use std::{borrow::Cow, boxed::Box, format};
-
-/// The Transfer precompile address.
-pub const ADDRESS: Address = u64_to_address(0xff - 2);
+use std::{boxed::Box, format};
 
 /// The native DOGE token address (only allowed caller for the transfer precompile).
 pub const NATIVE_DOGE_TOKEN_ADDRESS: Address =
     address!("0x530000000000000000000000000000000000d09e");
-
-/// The Transfer precompile id.
-pub const ID: PrecompileId = PrecompileId::Custom(Cow::Borrowed("TRANSFER"));
 
 /// The Transfer precompile gas cost.
 pub const GAS_COST: u64 = 9000;
@@ -24,7 +17,7 @@ const CALL_DATA_LENGTH: usize = 32 + 32 + 32; // 3 parameters, each 32 bytes
 /// Returns the lazily initialized native transfer precompile.
 pub fn precompile() -> &'static DynPrecompile {
     static INSTANCE: OnceBox<DynPrecompile> = OnceBox::new();
-    INSTANCE.get_or_init(|| Box::new(DynPrecompile::new_stateful(ID, run)))
+    INSTANCE.get_or_init(|| Box::new(DynPrecompile::new_stateful(addresses::TRANSFER_ID, run)))
 }
 
 fn run(mut input: PrecompileInput<'_>) -> PrecompileResult {
