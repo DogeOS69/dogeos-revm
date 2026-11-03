@@ -2,6 +2,7 @@ use crate::{
     builder::{ScrollBuilder, ScrollCfgExt, ScrollContext},
     handler::ScrollHandler,
     test_utils::context,
+    transaction::L1_MESSAGE_TYPE,
     ScrollSpecId,
 };
 use revm::{
@@ -72,7 +73,6 @@ fn non_l1_validation_matches_mainnet_across_transaction_types() {
         ("eip1559", TransactionType::Eip1559 as u8),
         ("eip4844", TransactionType::Eip4844 as u8),
         ("eip7702-before-euclid", TransactionType::Eip7702 as u8),
-        ("custom", 0x7f),
     ];
 
     for (case, tx_type) in cases {
@@ -84,6 +84,37 @@ fn non_l1_validation_matches_mainnet_across_transaction_types() {
             });
 
         assert_matches_mainnet(ctx, case);
+    }
+}
+
+#[test]
+fn custom_transaction_types_other_than_l1_message_are_rejected() {
+    let handler = ScrollHandler::<_, EVMError<_>, EthFrame<_>>::new();
+
+    for spec in [ScrollSpecId::DARWIN, ScrollSpecId::TSUKI_V2] {
+        for tx_type in [5, L1_MESSAGE_TYPE - 1, L1_MESSAGE_TYPE + 1, u8::MAX] {
+            let ctx = context()
+                .modify_cfg_chained(|cfg| cfg.set_scroll_spec(spec))
+                .modify_tx_chained(|tx| {
+                    tx.base.tx_type = tx_type;
+                    tx.base.chain_id = Some(1);
+                });
+            let mut evm = ctx.build_scroll();
+
+            assert_eq!(
+                handler.validate_env(&mut evm),
+                Err(EVMError::Transaction(InvalidTransaction::Str(
+                    "unsupported transaction type".into()
+                ))),
+                "tx type {tx_type:#x} at {spec:?}"
+            );
+        }
+
+        let ctx = context()
+            .modify_cfg_chained(|cfg| cfg.set_scroll_spec(spec))
+            .modify_tx_chained(|tx| tx.base.tx_type = L1_MESSAGE_TYPE);
+        let mut evm = ctx.build_scroll();
+        assert_eq!(handler.validate_env(&mut evm), Ok(()), "L1 message at {spec:?}");
     }
 }
 

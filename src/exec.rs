@@ -21,7 +21,7 @@ use revm_inspector::{InspectCommitEvm, InspectEvm, Inspector, InspectorHandler, 
 
 pub trait ScrollContextTr:
     ContextTr<
-    Journal: JournalTr<State = EvmState>,
+    Journal: JournalTr<State = EvmState> + JournalExt,
     Tx: ScrollTxTr,
     Cfg: Cfg<Spec = ScrollSpecId>,
     Chain = ScrollChainContext,
@@ -31,7 +31,7 @@ pub trait ScrollContextTr:
 
 impl<T> ScrollContextTr for T where
     T: ContextTr<
-        Journal: JournalTr<State = EvmState>,
+        Journal: JournalTr<State = EvmState> + JournalExt,
         Tx: ScrollTxTr,
         Cfg: Cfg<Spec = ScrollSpecId>,
         Chain = ScrollChainContext,

@@ -1,6 +1,8 @@
 use crate::ScrollSpecId;
 
 use revm::{
+    context::JournalTr,
+    inspector::JournalExt,
     primitives::{address, Address, U256},
     Database,
 };
@@ -54,6 +56,49 @@ pub const PENALTY_FACTOR_SLOT: U256 = U256::from_limbs([10u64, 0, 0, 0]);
 const U64_MAX: U256 = U256::from_limbs([u64::MAX, 0, 0, 0]);
 const U96_MAX: U256 = U256::from_limbs([u64::MAX, u32::MAX as u64, 0, 0]);
 
+// L1 FEE ERROR
+// ================================================================================================
+
+/// An error returned when the L1 fee of a transaction cannot be calculated from its inputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum L1FeeError {
+    /// An L1 gas price oracle value required by the spec is not set.
+    MissingOracleValue,
+    /// The compression ratio required from Feynman until Galileo is not set.
+    MissingCompressionRatio,
+    /// The compression ratio is below [`TX_L1_FEE_PRECISION`], i.e. below 1.
+    InvalidCompressionRatio(U256),
+    /// The compressed size required from Galileo is not set.
+    MissingCompressedSize,
+    /// The compressed size is larger than the size of the original transaction.
+    InvalidCompressedSize {
+        /// The size of the compressed rlp-encoded transaction.
+        compressed_size: usize,
+        /// The size of the original rlp-encoded transaction.
+        tx_size: usize,
+    },
+}
+
+impl core::fmt::Display for L1FeeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::MissingOracleValue => write!(f, "missing L1 gas price oracle value"),
+            Self::MissingCompressionRatio => write!(f, "missing transaction compression ratio"),
+            Self::InvalidCompressionRatio(ratio) => write!(
+                f,
+                "transaction compression ratio {ratio} must be greater or equal to {TX_L1_FEE_PRECISION}"
+            ),
+            Self::MissingCompressedSize => write!(f, "missing transaction compressed size"),
+            Self::InvalidCompressedSize { compressed_size, tx_size } => write!(
+                f,
+                "transaction compressed size {compressed_size} must be less than or equal to the original size {tx_size}"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for L1FeeError {}
+
 // L1 BLOCK INFO
 // ================================================================================================
 
@@ -91,9 +136,43 @@ impl L1BlockInfo {
         db: &mut DB,
         spec_id: ScrollSpecId,
     ) -> Result<L1BlockInfo, DB::Error> {
-        let l1_base_fee = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_BASE_FEE_SLOT)?;
-        let l1_fee_overhead = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_OVERHEAD_SLOT)?;
-        let l1_base_fee_scalar = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_SCALAR_SLOT)?;
+        Self::try_fetch_with(|slot| db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, slot), spec_id)
+    }
+
+    /// Try to fetch the L1 block info through the journal, so that oracle updates made by earlier
+    /// transactions and not yet committed to the database are seen.
+    ///
+    /// Slots that are not in the journal are read from the database. Unlike `sload`, this does not
+    /// load the oracle account or its slots into the journal, so their warm/cold status is
+    /// unchanged.
+    pub fn try_fetch_from_journal<J: JournalTr + JournalExt>(
+        journal: &mut J,
+        spec_id: ScrollSpecId,
+    ) -> Result<L1BlockInfo, <J::Database as Database>::Error> {
+        Self::try_fetch_with(
+            |slot| {
+                let journaled = journal
+                    .evm_state()
+                    .get(&L1_GAS_PRICE_ORACLE_ADDRESS)
+                    .and_then(|account| account.storage.get(&slot))
+                    .map(|slot| slot.present_value);
+                match journaled {
+                    Some(value) => Ok(value),
+                    None => journal.db_mut().storage(L1_GAS_PRICE_ORACLE_ADDRESS, slot),
+                }
+            },
+            spec_id,
+        )
+    }
+
+    /// Fetches the L1 block info, reading each L1 gas price oracle slot with `storage`.
+    fn try_fetch_with<E>(
+        mut storage: impl FnMut(U256) -> Result<U256, E>,
+        spec_id: ScrollSpecId,
+    ) -> Result<L1BlockInfo, E> {
+        let l1_base_fee = storage(L1_BASE_FEE_SLOT)?;
+        let l1_fee_overhead = storage(L1_OVERHEAD_SLOT)?;
+        let l1_base_fee_scalar = storage(L1_SCALAR_SLOT)?;
 
         // If Curie is not enabled, return the L1 block info without Curie fields.
         if !spec_id.is_enabled_in(ScrollSpecId::CURIE) {
@@ -105,9 +184,9 @@ impl L1BlockInfo {
             });
         }
 
-        let l1_blob_base_fee = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_BLOB_BASE_FEE_SLOT)?;
-        let l1_commit_scalar = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_COMMIT_SCALAR_SLOT)?;
-        let l1_blob_scalar = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_BLOB_SCALAR_SLOT)?;
+        let l1_blob_base_fee = storage(L1_BLOB_BASE_FEE_SLOT)?;
+        let l1_commit_scalar = storage(L1_COMMIT_SCALAR_SLOT)?;
+        let l1_blob_scalar = storage(L1_BLOB_SCALAR_SLOT)?;
         let calldata_gas = l1_commit_scalar.saturating_mul(l1_base_fee);
 
         // If Feynman is not enabled, return the L1 block info without Feynman fields.
@@ -124,8 +203,8 @@ impl L1BlockInfo {
             });
         }
 
-        let penalty_threshold = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, PENALTY_THRESHOLD_SLOT)?;
-        let penalty_factor = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, PENALTY_FACTOR_SLOT)?;
+        let penalty_threshold = storage(PENALTY_THRESHOLD_SLOT)?;
+        let penalty_factor = storage(PENALTY_FACTOR_SLOT)?;
 
         Ok(L1BlockInfo {
             l1_base_fee,
@@ -157,10 +236,10 @@ impl L1BlockInfo {
     ///
     /// The result is already priced in wei and scaled by [`TX_L1_FEE_PRECISION`], like
     /// `calldata_gas`.
-    fn curie_blob_fee(&self, input: &[u8]) -> U256 {
-        U256::from(input.len())
-            .saturating_mul(self.l1_blob_base_fee.expect("l1_blob_base_fee should be set in Curie"))
-            .saturating_mul(self.l1_blob_scalar.expect("l1_blob_scalar should be set in Curie"))
+    fn curie_blob_fee(&self, input: &[u8]) -> Result<U256, L1FeeError> {
+        let l1_blob_base_fee = self.l1_blob_base_fee.ok_or(L1FeeError::MissingOracleValue)?;
+        let l1_blob_scalar = self.l1_blob_scalar.ok_or(L1FeeError::MissingOracleValue)?;
+        Ok(U256::from(input.len()).saturating_mul(l1_blob_base_fee).saturating_mul(l1_blob_scalar))
     }
 
     fn calculate_tx_l1_cost_shanghai(&self, input: &[u8]) -> U256 {
@@ -171,19 +250,19 @@ impl L1BlockInfo {
             .wrapping_div(TX_L1_FEE_PRECISION_U256)
     }
 
-    fn calculate_tx_l1_cost_curie(&self, input: &[u8]) -> U256 {
+    fn calculate_tx_l1_cost_curie(&self, input: &[u8]) -> Result<U256, L1FeeError> {
         // "commitScalar * l1BaseFee + blobScalar * _data.length * l1BlobBaseFee"
-        let blob_fee = self.curie_blob_fee(input);
+        let blob_fee = self.curie_blob_fee(input)?;
+        let calldata_gas = self.calldata_gas.ok_or(L1FeeError::MissingOracleValue)?;
 
-        self.calldata_gas.unwrap().saturating_add(blob_fee).wrapping_div(TX_L1_FEE_PRECISION_U256)
+        Ok(calldata_gas.saturating_add(blob_fee).wrapping_div(TX_L1_FEE_PRECISION_U256))
     }
 
     fn calculate_tx_l1_cost_feynman(
         &self,
         input: &[u8],
-        spec_id: ScrollSpecId,
         compression_ratio: U256,
-    ) -> U256 {
+    ) -> Result<U256, L1FeeError> {
         // rollup_fee(tx) = size(tx) * (component_exec + component_blob) * penalty(tx)
         //
         // - size(tx): denotes the size of the signed tx.
@@ -212,30 +291,15 @@ impl L1BlockInfo {
         // compression_ratio, penalty_threshold, penalty_factor, penalty are all scaled
         // by TX_L1_FEE_PRECISION_U256 (1e9) to avoid losing precision.
 
-        assert!(
-            compression_ratio >= TX_L1_FEE_PRECISION_U256,
-            "transaction compression ratio must be greater or equal to {TX_L1_FEE_PRECISION_U256:?} - compression ratio: {compression_ratio:?}"
-        );
+        if compression_ratio < TX_L1_FEE_PRECISION_U256 {
+            return Err(L1FeeError::InvalidCompressionRatio(compression_ratio));
+        }
 
-        let exec_scalar = self
-            .l1_commit_scalar
-            .unwrap_or_else(|| panic!("missing exec scalar in spec_id={spec_id:?}"));
-
-        let compressed_blob_scalar = self
-            .l1_blob_scalar
-            .unwrap_or_else(|| panic!("missing l1 blob scalar in spec_id={spec_id:?}"));
-
-        let l1_blob_base_fee = self
-            .l1_blob_base_fee
-            .unwrap_or_else(|| panic!("missing l1 blob base fee in spec_id={spec_id:?}"));
-
-        let penalty_threshold = self
-            .penalty_threshold
-            .unwrap_or_else(|| panic!("missing penalty threshold in spec_id={spec_id:?}"));
-
-        let penalty_factor = self
-            .penalty_factor
-            .unwrap_or_else(|| panic!("missing penalty factor in spec_id={spec_id:?}"));
+        let exec_scalar = self.l1_commit_scalar.ok_or(L1FeeError::MissingOracleValue)?;
+        let compressed_blob_scalar = self.l1_blob_scalar.ok_or(L1FeeError::MissingOracleValue)?;
+        let l1_blob_base_fee = self.l1_blob_base_fee.ok_or(L1FeeError::MissingOracleValue)?;
+        let penalty_threshold = self.penalty_threshold.ok_or(L1FeeError::MissingOracleValue)?;
+        let penalty_factor = self.penalty_factor.ok_or(L1FeeError::MissingOracleValue)?;
 
         let tx_size = U256::from(input.len());
 
@@ -249,19 +313,18 @@ impl L1BlockInfo {
             penalty_factor
         };
 
-        tx_size
+        Ok(tx_size
             .saturating_mul(fee_per_byte)
             .saturating_mul(penalty)
             .wrapping_div(TX_L1_FEE_PRECISION_U256) // account for scalars
-            .wrapping_div(TX_L1_FEE_PRECISION_U256) // account for penalty
+            .wrapping_div(TX_L1_FEE_PRECISION_U256)) // account for penalty
     }
 
     fn calculate_tx_l1_cost_galileo(
         &self,
-        tx_size: usize, // size of the original rlp-encoded transaction
-        spec_id: ScrollSpecId,
+        tx_size: usize,         // size of the original rlp-encoded transaction
         compressed_size: usize, // size of the compressed rlp-encoded transaction
-    ) -> U256 {
+    ) -> Result<U256, L1FeeError> {
         // Post Galileo rollup fee formula:
         // rollup_fee(tx) = fee_per_byte * compressed_size(tx) * (1 + penalty(tx)) / PRECISION
         //
@@ -270,29 +333,20 @@ impl L1BlockInfo {
         // compressed_size(tx) = min(len(zstd(rlp(tx))), len(rlp(tx)))
         // penalty(tx) = compressed_size(tx) / penalty_factor
 
-        assert!(
-            compressed_size <= tx_size,
-            "transaction compressed size {compressed_size} must be less than or equal to the original size {tx_size}"
-        );
+        if compressed_size > tx_size {
+            return Err(L1FeeError::InvalidCompressedSize { compressed_size, tx_size });
+        }
 
         let compressed_size = U256::from(compressed_size);
 
-        let exec_scalar = self
-            .l1_commit_scalar
-            .unwrap_or_else(|| panic!("missing exec scalar in spec_id={spec_id:?}"));
-
-        let blob_scalar = self
-            .l1_blob_scalar
-            .unwrap_or_else(|| panic!("missing l1 blob scalar in spec_id={spec_id:?}"));
-
-        let l1_blob_base_fee = self
-            .l1_blob_base_fee
-            .unwrap_or_else(|| panic!("missing l1 blob base fee in spec_id={spec_id:?}"));
+        let exec_scalar = self.l1_commit_scalar.ok_or(L1FeeError::MissingOracleValue)?;
+        let blob_scalar = self.l1_blob_scalar.ok_or(L1FeeError::MissingOracleValue)?;
+        let l1_blob_base_fee = self.l1_blob_base_fee.ok_or(L1FeeError::MissingOracleValue)?;
 
         let penalty_factor = match self.penalty_factor {
             Some(f) if f == U256::ZERO => U256::ONE, // sanitize zero penalty factor
             Some(f) => f,
-            None => panic!("missing penalty factor in spec_id={spec_id:?}"),
+            None => return Err(L1FeeError::MissingOracleValue),
         };
 
         // fee_per_byte = (exec_scalar * l1_base_fee) + (blob_scalar * l1_blob_base_fee)
@@ -307,10 +361,43 @@ impl L1BlockInfo {
         let penalty_term = base_term.saturating_mul(compressed_size).wrapping_div(penalty_factor);
 
         // rollup_fee = (base_term + penalty_term) / PRECISION
-        base_term.saturating_add(penalty_term).wrapping_div(TX_L1_FEE_PRECISION_U256)
+        Ok(base_term.saturating_add(penalty_term).wrapping_div(TX_L1_FEE_PRECISION_U256))
     }
 
     /// Calculate the gas cost of a transaction based on L1 block data posted on L2.
+    ///
+    /// Returns an error if an input required by the spec's L1 fee formula is missing or invalid.
+    pub fn try_calculate_tx_l1_cost(
+        &self,
+        input: &[u8],
+        spec_id: ScrollSpecId,
+        compression_ratio: Option<U256>,
+        compressed_size: Option<usize>,
+    ) -> Result<U256, L1FeeError> {
+        let l1_cost = if !spec_id.is_enabled_in(ScrollSpecId::CURIE) {
+            self.calculate_tx_l1_cost_shanghai(input)
+        } else if !spec_id.is_enabled_in(ScrollSpecId::FEYNMAN) {
+            self.calculate_tx_l1_cost_curie(input)?
+        } else if !spec_id.is_enabled_in(ScrollSpecId::GALILEO) {
+            let compression_ratio = compression_ratio.ok_or(L1FeeError::MissingCompressionRatio)?;
+            self.calculate_tx_l1_cost_feynman(input, compression_ratio)?
+        } else {
+            let compressed_size = compressed_size.ok_or(L1FeeError::MissingCompressedSize)?;
+            self.calculate_tx_l1_cost_galileo(input.len(), compressed_size)?
+        };
+
+        if spec_id.is_enabled_in(ScrollSpecId::TSUKI) {
+            Ok(l1_cost.min(U96_MAX))
+        } else {
+            Ok(l1_cost.min(U64_MAX))
+        }
+    }
+
+    /// Calculate the gas cost of a transaction based on L1 block data posted on L2.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`Self::try_calculate_tx_l1_cost`] returns an error.
     pub fn calculate_tx_l1_cost(
         &self,
         input: &[u8],
@@ -318,26 +405,8 @@ impl L1BlockInfo {
         compression_ratio: Option<U256>,
         compressed_size: Option<usize>,
     ) -> U256 {
-        let l1_cost = if !spec_id.is_enabled_in(ScrollSpecId::CURIE) {
-            self.calculate_tx_l1_cost_shanghai(input)
-        } else if !spec_id.is_enabled_in(ScrollSpecId::FEYNMAN) {
-            self.calculate_tx_l1_cost_curie(input)
-        } else if !spec_id.is_enabled_in(ScrollSpecId::GALILEO) {
-            let compression_ratio = compression_ratio.unwrap_or_else(|| {
-                panic!("compression ratio should be set in spec_id={spec_id:?}")
-            });
-            self.calculate_tx_l1_cost_feynman(input, spec_id, compression_ratio)
-        } else {
-            let compressed_size = compressed_size
-                .unwrap_or_else(|| panic!("compressed size should be set in spec_id={spec_id:?}"));
-            self.calculate_tx_l1_cost_galileo(input.len(), spec_id, compressed_size)
-        };
-
-        if spec_id.is_enabled_in(ScrollSpecId::TSUKI) {
-            l1_cost.min(U96_MAX)
-        } else {
-            l1_cost.min(U64_MAX)
-        }
+        self.try_calculate_tx_l1_cost(input, spec_id, compression_ratio, compressed_size)
+            .unwrap_or_else(|err| panic!("{err} in spec_id={spec_id:?}"))
     }
 }
 
@@ -365,9 +434,58 @@ mod tests {
 
         // Use a dummy size larger than the compressed size.
         let tx_size = 1e10 as usize;
-        let spec = ScrollSpecId::GALILEO;
-        let actual = gpo.calculate_tx_l1_cost_galileo(tx_size, spec, compressed_size);
-        assert_eq!(expected, actual);
+        let actual = gpo.calculate_tx_l1_cost_galileo(tx_size, compressed_size);
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn test_invalid_inputs_return_errors() {
+        let gpo = L1BlockInfo {
+            l1_blob_base_fee: Some(U256::ONE),
+            l1_commit_scalar: Some(U256::ONE),
+            l1_blob_scalar: Some(U256::ONE),
+            calldata_gas: Some(U256::ONE),
+            penalty_threshold: Some(U256::ONE),
+            penalty_factor: Some(U256::ONE),
+            ..Default::default()
+        };
+        let input = [1u8; 4];
+        let ratio = Some(TX_L1_FEE_PRECISION_U256);
+
+        assert!(gpo.try_calculate_tx_l1_cost(&input, ScrollSpecId::FEYNMAN, ratio, None).is_ok());
+        assert!(gpo
+            .try_calculate_tx_l1_cost(&input, ScrollSpecId::TSUKI_V2, None, Some(4))
+            .is_ok());
+
+        // Oracle values that Curie and later formulas need are not set.
+        for spec in [ScrollSpecId::CURIE, ScrollSpecId::FEYNMAN, ScrollSpecId::TSUKI_V2] {
+            assert_eq!(
+                L1BlockInfo::default().try_calculate_tx_l1_cost(&input, spec, ratio, Some(4)),
+                Err(L1FeeError::MissingOracleValue),
+                "{spec:?}"
+            );
+        }
+
+        // Feynman until Galileo needs a compression ratio of at least 1.
+        assert_eq!(
+            gpo.try_calculate_tx_l1_cost(&input, ScrollSpecId::FEYNMAN, None, Some(4)),
+            Err(L1FeeError::MissingCompressionRatio)
+        );
+        let low_ratio = TX_L1_FEE_PRECISION_U256 - U256::ONE;
+        assert_eq!(
+            gpo.try_calculate_tx_l1_cost(&input, ScrollSpecId::FEYNMAN, Some(low_ratio), None),
+            Err(L1FeeError::InvalidCompressionRatio(low_ratio))
+        );
+
+        // Galileo and later need a compressed size no larger than the transaction.
+        assert_eq!(
+            gpo.try_calculate_tx_l1_cost(&input, ScrollSpecId::TSUKI_V2, ratio, None),
+            Err(L1FeeError::MissingCompressedSize)
+        );
+        assert_eq!(
+            gpo.try_calculate_tx_l1_cost(&input, ScrollSpecId::TSUKI_V2, None, Some(5)),
+            Err(L1FeeError::InvalidCompressedSize { compressed_size: 5, tx_size: 4 })
+        );
     }
 
     #[test]
