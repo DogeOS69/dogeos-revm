@@ -2,7 +2,7 @@ use crate::{
     builder::{ScrollBuilder, ScrollCfgExt},
     handler::ScrollHandler,
     l1block::*,
-    test_utils::{context, ScrollContextTestUtils, BENEFICIARY, CALLER},
+    test_utils::{context, context_with_spec, ScrollContextTestUtils, BENEFICIARY, CALLER},
     transaction::SYSTEM_ADDRESS,
     ScrollSpecId,
 };
@@ -10,9 +10,10 @@ use revm::{
     context::{result::EVMError, ContextTr, JournalTr},
     handler::{EthFrame, EvmTr, FrameResult, Handler},
     interpreter::{CallOutcome, Gas, InstructionResult, InterpreterResult},
+    ExecuteEvm,
 };
 use revm_primitives::U256;
-use std::{boxed::Box, vec};
+use std::{boxed::Box, format, vec};
 
 #[test]
 fn test_should_deduct_correct_fees_bernoulli() -> Result<(), Box<dyn core::error::Error>> {
@@ -133,6 +134,50 @@ fn test_should_deduct_correct_fees_feynman() -> Result<(), Box<dyn core::error::
     // cost is 21k + 6k (applying 2x penalty).
     let balance_diff = initial_funds.saturating_sub(caller_account.data.info.balance);
     assert_eq!(balance_diff, U256::from(27000));
+
+    Ok(())
+}
+
+#[test]
+fn test_invalid_l1_fee_inputs_fail_without_panicking() -> Result<(), Box<dyn core::error::Error>> {
+    // The test transaction's rlp bytes are 4 bytes long.
+    let cases = [
+        (ScrollSpecId::FEYNMAN, None, Some(4), L1FeeError::MissingCompressionRatio),
+        (
+            ScrollSpecId::FEYNMAN,
+            Some(TX_L1_FEE_PRECISION_U256 - U256::ONE),
+            Some(4),
+            L1FeeError::InvalidCompressionRatio(TX_L1_FEE_PRECISION_U256 - U256::ONE),
+        ),
+        (
+            ScrollSpecId::TSUKI_V2,
+            Some(TX_L1_FEE_PRECISION_U256),
+            None,
+            L1FeeError::MissingCompressedSize,
+        ),
+        (
+            ScrollSpecId::TSUKI_V2,
+            Some(TX_L1_FEE_PRECISION_U256),
+            Some(5),
+            L1FeeError::InvalidCompressedSize { compressed_size: 5, tx_size: 4 },
+        ),
+    ];
+
+    for (spec, compression_ratio, compressed_size, expected) in cases {
+        let ctx =
+            context_with_spec(spec).with_funds(U256::from(1_000_000)).modify_tx_chained(|tx| {
+                tx.compression_ratio = compression_ratio;
+                tx.compressed_size = compressed_size;
+            });
+        let tx = ctx.tx.clone();
+        let mut evm = ctx.build_scroll();
+
+        assert_eq!(
+            evm.transact(tx),
+            Err(EVMError::Custom(format!("[SCROLL] Failed to calculate L1 fee: {expected}"))),
+            "{spec:?}"
+        );
+    }
 
     Ok(())
 }

@@ -23,7 +23,7 @@ use revm::{
     },
     primitives::{hardfork::SpecId, U256},
 };
-use std::{boxed::Box, string::ToString};
+use std::{boxed::Box, format, string::ToString};
 
 /// The Scroll handler.
 pub struct ScrollHandler<EVM, ERROR, FRAME> {
@@ -46,14 +46,15 @@ impl<EVM, ERROR, FRAME> Default for ScrollHandler<EVM, ERROR, FRAME> {
 ///
 /// The trait modifies the following handlers:
 /// - `validate_env` - Copies the mainnet environment/transaction validation for the mapped Ethereum
-///   spec, with Scroll-specific handling for L1 messages (EIP-7825 cap exemption) and the Euclid
-///   EIP-7702 activation boundary.
+///   spec, with Scroll-specific handling for L1 messages (EIP-7825 cap exemption), the Euclid
+///   EIP-7702 activation boundary, and rejection of custom transaction types other than L1
+///   messages.
 /// - `validate_initial_tx_gas` - Computes intrinsic and floor gas from the configured Scroll gas
 ///   parameters instead of deriving them from the mapped Ethereum spec, with Feynman's EIP-7623
 ///   activation boundary.
-/// - `pre_execution` - Adds a hook to refresh `L1BlockInfo` from the L1 gas price oracle in the
-///   database for every fee-charged (non-L1-message, non-system) transaction such that it can be
-///   used to calculate the L1 cost of a transaction.
+/// - `pre_execution` - Adds a hook to refresh `L1BlockInfo` from the L1 gas price oracle, read
+///   through the journal, for every fee-charged (non-L1-message, non-system) transaction such that
+///   it can be used to calculate the L1 cost of a transaction.
 /// - `validate_against_state_and_deduct_caller` - Overrides the logic to deduct the max transaction
 ///   fee, including the L1 fee, from the caller's balance.
 /// - `last_frame_result` - Overrides the logic for gas refund in the case the transaction is a L1
@@ -61,6 +62,8 @@ impl<EVM, ERROR, FRAME> Default for ScrollHandler<EVM, ERROR, FRAME> {
 /// - `eip7623_check_gas_floor` - Skips the EIP-7623 floor gas charge in the case the transaction is
 ///   a L1 message.
 /// - `refund` - Overrides the logic for gas refund in the case the transaction is a L1 message.
+/// - `reimburse_caller` - Skips returning unused gas to the caller in the case the transaction is a
+///   L1 message, as its gas is not charged upfront.
 /// - `post_execution.reward_beneficiary` - Overrides the logic to reward the beneficiary with the
 ///   gas fee and skip rewarding in case the transaction is a L1 message.
 /// - `execution_result` - Zeroes the EIP-7623 floor gas on the returned [`ResultGas`] in the case
@@ -185,7 +188,12 @@ where
                 }
             }
             TransactionType::Custom => {
-                // Custom transaction type check is not done here.
+                // SCROLL DIVERGENCE: the L1 message is the only supported custom transaction type.
+                if !tx.is_l1_msg() {
+                    return Err(
+                        InvalidTransaction::Str("unsupported transaction type".into()).into()
+                    );
+                }
             }
         };
 
@@ -284,7 +292,7 @@ where
         // transactions in a block.
         if !evm.ctx().tx().is_l1_msg() && !evm.ctx().tx().is_system_tx() {
             let spec = evm.ctx().cfg().spec();
-            let l1_block_info = L1BlockInfo::try_fetch(evm.ctx().db_mut(), spec)?;
+            let l1_block_info = L1BlockInfo::try_fetch_from_journal(evm.ctx().journal_mut(), spec)?;
             evm.ctx().chain_mut().l1_block_info = l1_block_info;
         }
 
@@ -473,6 +481,19 @@ where
         post_execution::refund(spec, exec_result.gas_mut(), eip7702_refund)
     }
 
+    #[inline]
+    fn reimburse_caller(
+        &self,
+        evm: &mut Self::Evm,
+        exec_result: &mut <<Self::Evm as EvmTr>::Frame as FrameTr>::FrameResult,
+    ) -> Result<(), Self::Error> {
+        // L1 messages are not charged for gas upfront, so there is no unused gas to return.
+        if evm.ctx().tx().is_l1_msg() {
+            return Ok(());
+        }
+        self.mainnet.reimburse_caller(evm, exec_result)
+    }
+
     fn reward_beneficiary(
         &self,
         evm: &mut Self::Evm,
@@ -495,18 +516,7 @@ where
 
         // calculate the L1 cost of the transaction.
         let l1_cost = if !ctx.tx().is_system_tx() {
-            let l1_block_info = ctx.chain().l1_block_info.clone();
-            let Some(rlp_bytes) = &ctx.tx().rlp_bytes() else {
-                return Err(ERROR::from_string(
-                    "[SCROLL] Failed to load transaction rlp_bytes.".to_string(),
-                ));
-            };
-            l1_block_info.calculate_tx_l1_cost(
-                rlp_bytes,
-                ctx.cfg().spec(),
-                ctx.tx().compression_ratio(),
-                ctx.tx().compressed_size(),
-            )
+            tx_l1_cost::<_, ERROR>(ctx, ctx.cfg().spec())?
         } else {
             U256::from(0)
         };
@@ -562,12 +572,15 @@ fn tx_l1_cost<CTX: ScrollContextTr, ERROR: FromStringError>(
         ));
     };
 
-    Ok(ctx.chain().l1_block_info.calculate_tx_l1_cost(
-        rlp_bytes,
-        spec,
-        ctx.tx().compression_ratio(),
-        ctx.tx().compressed_size(),
-    ))
+    ctx.chain()
+        .l1_block_info
+        .try_calculate_tx_l1_cost(
+            rlp_bytes,
+            spec,
+            ctx.tx().compression_ratio(),
+            ctx.tx().compressed_size(),
+        )
+        .map_err(|err| ERROR::from_string(format!("[SCROLL] Failed to calculate L1 fee: {err}")))
 }
 
 // Mirrors revm v103 `crates/handler/src/validation.rs::validate_priority_fee_for_tx`.
@@ -590,6 +603,7 @@ mod tests {
     use super::*;
     use crate::{
         builder::ScrollBuilder,
+        l1block::{L1_BASE_FEE_SLOT, L1_GAS_PRICE_ORACLE_ADDRESS},
         test_utils::{
             context, context_with_spec, ScrollContextTestUtils, BENEFICIARY, CALLER, L1_DATA_COST,
             MIN_TRANSACTION_COST, TO,
@@ -600,10 +614,12 @@ mod tests {
     use revm::{
         context::result::EVMError,
         handler::EthFrame,
+        inspector::JournalExt,
         interpreter::{CallOutcome, InstructionResult, InterpreterResult},
-        ExecuteEvm,
+        state::{AccountInfo, Bytecode},
+        Database, ExecuteEvm,
     };
-    use revm_primitives::TxKind;
+    use revm_primitives::{bytes, TxKind};
     use rstest::rstest;
 
     #[rstest]
@@ -649,6 +665,44 @@ mod tests {
 
         let l1_block_info = evm.ctx().chain.l1_block_info.clone();
         assert_ne!(l1_block_info, L1BlockInfo::default());
+
+        // Fetching the L1 block info must not load the oracle into the journal, which would
+        // make it warm for the transaction.
+        assert!(!evm.ctx().journal_mut().evm_state().contains_key(&L1_GAS_PRICE_ORACLE_ADDRESS));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_l1_block_info_sees_uncommitted_oracle_update() -> Result<(), Box<dyn core::error::Error>>
+    {
+        // Oracle code that sets the L1 base fee slot to 1_000_000.
+        let oracle_code = Bytecode::new_raw(bytes!("620f424060015500"));
+        let ctx = context().with_funds(U256::from(1_000_000)).modify_db_chained(|db| {
+            db.insert_account_info(
+                L1_GAS_PRICE_ORACLE_ADDRESS,
+                AccountInfo {
+                    code_hash: oracle_code.hash_slow(),
+                    code: Some(oracle_code),
+                    ..Default::default()
+                },
+            )
+        });
+        let mut update_tx = ctx.tx.clone();
+        update_tx.base.kind = TxKind::Call(L1_GAS_PRICE_ORACLE_ADDRESS);
+        update_tx.base.gas_limit = 100_000;
+        let mut next_tx = ctx.tx.clone();
+        next_tx.base.nonce = 1;
+        let mut evm = ctx.build_scroll();
+
+        // Execute both transactions without committing the first one to the database.
+        assert!(evm.transact_one(update_tx)?.is_success());
+        assert!(evm.transact_one(next_tx)?.is_success());
+        let db_base_fee =
+            evm.ctx().db_mut().storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_BASE_FEE_SLOT)?;
+        assert_eq!(db_base_fee, U256::from(10_000));
+
+        assert_eq!(evm.ctx().chain.l1_block_info.l1_base_fee, U256::from(1_000_000));
 
         Ok(())
     }
