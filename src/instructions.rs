@@ -182,6 +182,15 @@ fn blockhash<WIRE: InterpreterTypes, H: ScrollContextTr>(context: InstructionCon
 /// SLOAD applies the current transaction's access list and slot warmth without warming the account.
 /// Only an absent account (or an unaffordable cold slot) needs the fallback below, avoiding an
 /// account load and checkpoint rollback on every affordable cold BLOCKHASH.
+///
+/// With a journal kept across transactions (`commit_tx` without `finalize`), SLOAD still refreshes
+/// the slot's transaction id and original value, but account metadata is refreshed only by the next
+/// real account load. This can leave the account's transaction id, cold flag and `original_info`
+/// different from the fallback path. It does not change the result or gas: SELFDESTRUCT is
+/// disabled, and DogeOS execution does not consume `original_info` through the BAL builder. The
+/// warm-slot path already defers this refresh. DogeOS block execution finalizes after every
+/// transaction, so its cached accounts belong to the current transaction. Revisit these assumptions
+/// if journal reuse, BAL consumption or SELFDESTRUCT is enabled in block execution.
 fn eip7709_history_sload<H: ScrollContextTr>(
     host: &mut H,
     index: U256,
