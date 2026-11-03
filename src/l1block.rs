@@ -1,6 +1,8 @@
 use crate::ScrollSpecId;
 
 use revm::{
+    context::JournalTr,
+    inspector::JournalExt,
     primitives::{address, Address, U256},
     Database,
 };
@@ -134,9 +136,43 @@ impl L1BlockInfo {
         db: &mut DB,
         spec_id: ScrollSpecId,
     ) -> Result<L1BlockInfo, DB::Error> {
-        let l1_base_fee = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_BASE_FEE_SLOT)?;
-        let l1_fee_overhead = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_OVERHEAD_SLOT)?;
-        let l1_base_fee_scalar = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_SCALAR_SLOT)?;
+        Self::try_fetch_with(|slot| db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, slot), spec_id)
+    }
+
+    /// Try to fetch the L1 block info through the journal, so that oracle updates made by earlier
+    /// transactions and not yet committed to the database are seen.
+    ///
+    /// Slots that are not in the journal are read from the database. Unlike `sload`, this does not
+    /// load the oracle account or its slots into the journal, so their warm/cold status is
+    /// unchanged.
+    pub fn try_fetch_from_journal<J: JournalTr + JournalExt>(
+        journal: &mut J,
+        spec_id: ScrollSpecId,
+    ) -> Result<L1BlockInfo, <J::Database as Database>::Error> {
+        Self::try_fetch_with(
+            |slot| {
+                let journaled = journal
+                    .evm_state()
+                    .get(&L1_GAS_PRICE_ORACLE_ADDRESS)
+                    .and_then(|account| account.storage.get(&slot))
+                    .map(|slot| slot.present_value);
+                match journaled {
+                    Some(value) => Ok(value),
+                    None => journal.db_mut().storage(L1_GAS_PRICE_ORACLE_ADDRESS, slot),
+                }
+            },
+            spec_id,
+        )
+    }
+
+    /// Fetches the L1 block info, reading each L1 gas price oracle slot with `storage`.
+    fn try_fetch_with<E>(
+        mut storage: impl FnMut(U256) -> Result<U256, E>,
+        spec_id: ScrollSpecId,
+    ) -> Result<L1BlockInfo, E> {
+        let l1_base_fee = storage(L1_BASE_FEE_SLOT)?;
+        let l1_fee_overhead = storage(L1_OVERHEAD_SLOT)?;
+        let l1_base_fee_scalar = storage(L1_SCALAR_SLOT)?;
 
         // If Curie is not enabled, return the L1 block info without Curie fields.
         if !spec_id.is_enabled_in(ScrollSpecId::CURIE) {
@@ -148,9 +184,9 @@ impl L1BlockInfo {
             });
         }
 
-        let l1_blob_base_fee = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_BLOB_BASE_FEE_SLOT)?;
-        let l1_commit_scalar = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_COMMIT_SCALAR_SLOT)?;
-        let l1_blob_scalar = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, L1_BLOB_SCALAR_SLOT)?;
+        let l1_blob_base_fee = storage(L1_BLOB_BASE_FEE_SLOT)?;
+        let l1_commit_scalar = storage(L1_COMMIT_SCALAR_SLOT)?;
+        let l1_blob_scalar = storage(L1_BLOB_SCALAR_SLOT)?;
         let calldata_gas = l1_commit_scalar.saturating_mul(l1_base_fee);
 
         // If Feynman is not enabled, return the L1 block info without Feynman fields.
@@ -167,8 +203,8 @@ impl L1BlockInfo {
             });
         }
 
-        let penalty_threshold = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, PENALTY_THRESHOLD_SLOT)?;
-        let penalty_factor = db.storage(L1_GAS_PRICE_ORACLE_ADDRESS, PENALTY_FACTOR_SLOT)?;
+        let penalty_threshold = storage(PENALTY_THRESHOLD_SLOT)?;
+        let penalty_factor = storage(PENALTY_FACTOR_SLOT)?;
 
         Ok(L1BlockInfo {
             l1_base_fee,

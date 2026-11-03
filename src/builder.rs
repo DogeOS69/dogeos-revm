@@ -8,6 +8,7 @@ use revm::{
     context::{BlockEnv, Cfg, CfgEnv, JournalTr, TxEnv},
     context_interface::{cfg::GasParams, Block},
     database::EmptyDB,
+    inspector::JournalExt,
     interpreter::interpreter::EthInterpreter,
     primitives::eip7825,
     state::EvmState,
@@ -34,7 +35,7 @@ where
     TX: ScrollTxTr,
     CFG: Cfg<Spec = ScrollSpecId>,
     DB: Database,
-    JOURNAL: JournalTr<Database = DB, State = EvmState>,
+    JOURNAL: JournalTr<Database = DB, State = EvmState> + JournalExt,
 {
     type Context = Self;
 
